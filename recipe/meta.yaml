@@ -1,0 +1,51 @@
+{% set versions = {
+    "10.3": "97677cbccb06b2821a5fa1569d1f561b253bd0651a97ab05d13247c708864840",
+    "9.1": "d5d04ec4e8ca74a833e21d705f603686e7d92b575a4fae96bb9ef765b7ea9b52",
+    "6.8": "226bc3b494675d0fe796119de3555251b7232c6dd4bbb8e7f5a928b157e7fd9d"
+} %}
+
+{% set version = environ.get('COMMIT_VERSION', None) %}
+{% set version = version or versions.keys()|first %}
+{% set version = version|string %}
+
+package:
+  name: {{ environ.get('ANACONDA_PACKAGE', "mcfm")|string|lower }}
+  version: {{ environ.get('ANACONDA_VERSION', version)|replace('/', '.')|replace('-', '.') }}
+
+source:
+  url: "https://mcfm.fnal.gov/downloads/MCFM-{{ version }}.tar.gz"
+  {% if versions.get(version, None) %}
+  sha256: {{ versions.get(version) }}
+  {% endif %}
+
+requirements:
+  build:
+    - {{ compiler('gfortran') }}   # GNU Fortran compiler
+    - {{ compiler('c') }}          # GNU C compiler
+    - {{ compiler('cxx') }}        # GNU C++ compiler
+    
+    - cmake                        # Build system
+    - make                         # Make utility
+    - automake
+    - autoconf
+    - libtool
+    - perl
+    - mpi
+    - mpich
+
+  host:
+    - lhapdf
+
+  run:
+    - lhapdf
+
+about:
+  home: "https://mcfm.fnal.gov"
+  license: "GPL-3.0"
+  summary: "MCFM is a parton-level Monte Carlo program"
+  description: |
+    MCFM is a parton-level Monte Carlo program that gives predictions for a wide range of processes at hadron colliders.
+    Almost all processes are available at NLO, but some processes are also available at NNLO or N3LO in QCD.
+extra:
+  recipe-maintainers:
+    - meiyasan

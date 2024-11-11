@@ -1,0 +1,80 @@
+name: Anaconda Tag Deletion
+
+on:
+  delete:
+    tags:
+      - '*'
+
+jobs:
+  anaconda:
+    runs-on: ubuntu-latest
+    steps:
+    
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set Package Name, Version, and Architecture
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TAG: ${{ github.event.ref }}
+        run: |
+          echo "## 📂 Checkout completed." >> $GITHUB_STEP_SUMMARY
+          echo "Checked out commit: \`$(git rev-parse HEAD)\`" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${GITHUB_REF}\`" >> $GITHUB_STEP_SUMMARY
+
+          COMMIT_VERSION="${REF_TAG:-0.0.0}"
+
+          ANACONDA_PACKAGE=$(basename `git rev-parse --show-toplevel` | sed 's,-feedstock,,g')
+          echo "ANACONDA_PACKAGE=$ANACONDA_PACKAGE" >> $GITHUB_ENV
+          ANACONDA_LABEL=${COMMIT_VERSION#*-}
+          echo "ANACONDA_LABEL=${ANACONDA_LABEL:-main}" >> $GITHUB_ENV
+          ANACONDA_VERSION=${COMMIT_VERSION}
+          echo "ANACONDA_VERSION=${ANACONDA_VERSION//-/.}" >> $GITHUB_ENV
+
+          echo "## 🏷️ Set Package Name, Version, and Architecture." >> $GITHUB_STEP_SUMMARY
+          echo "- Anaconda Label: \`${ANACONDA_LABEL:-main}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Package Name: \`$ANACONDA_PACKAGE\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Package Version: \`$ANACONDA_VERSION\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Print GitHub Context as JSON
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: |
+          echo "$GITHUB_CONTEXT"
+
+      - name: Print Environment
+        run: |
+          env
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+
+      - name: Install Forge & Tools
+        run: |
+          /usr/share/miniconda/bin/conda install -c conda-forge -y conda-smithy conda-verify conda-package-handling anaconda-client
+          /usr/share/miniconda/bin/conda config --add channels defaults
+          /usr/share/miniconda/bin/conda config --add channels conda-forge
+          /usr/share/miniconda/bin/conda config --add channels hep-forge
+        
+          echo "## 🛠️ Set up Conda environment." >> $GITHUB_STEP_SUMMARY
+
+      - name: Anaconda Package Removal
+        env:
+          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+          ANACONDA_USER:  ${{ github.repository_owner }}
+        run: |
+
+          echo "## 🗑️ Removing Package" >> $GITHUB_STEP_SUMMARY
+          echo "Removing package ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}" >> $GITHUB_STEP_SUMMARY
+          /usr/share/miniconda/bin/anaconda -t $ANACONDA_TOKEN remove --force ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}
+          echo "Removing package ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}.dev" >> $GITHUB_STEP_SUMMARY
+          /usr/share/miniconda/bin/anaconda -t $ANACONDA_TOKEN remove --force ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}.dev
+
+          echo "### 📥 Package Location" >> $GITHUB_STEP_SUMMARY
+          echo "- https://anaconda.org/${GITHUB_REPOSITORY_OWNER}/${ANACONDA_PACKAGE}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY

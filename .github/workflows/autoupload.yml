@@ -1,0 +1,211 @@
+name: Anaconda Build & Upload
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '*'
+
+jobs:
+  env:
+    runs-on: ubuntu-latest
+    outputs:
+      COMMIT_SHA: ${{ steps.git.outputs.COMMIT_SHA }}
+      COMMIT_LATEST_TAG: ${{ steps.git.outputs.COMMIT_LATEST_TAG }}
+      COMMIT_TAG: ${{ steps.git.outputs.COMMIT_TAG }}
+      COMMIT_VERSION: ${{ steps.git.outputs.COMMIT_VERSION }}
+      COMMIT_TYPE: ${{ steps.git.outputs.COMMIT_TYPE }}
+
+      ANACONDA_LABEL: ${{ steps.anaconda.outputs.ANACONDA_LABEL }}
+      ANACONDA_VERSION: ${{ steps.anaconda.outputs.ANACONDA_VERSION }}
+      ANACONDA_PACKAGE: ${{ steps.anaconda.outputs.ANACONDA_PACKAGE }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          
+      - id: git 
+        name: Fetch Git Repository Information
+        run: |
+          COMMIT_SHA=$(git rev-parse HEAD || exit 1)
+          [ -z "$COMMIT_SHA" ] || echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
+          [ -z "$COMMIT_SHA" ] || echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_OUTPUT
+
+          COMMIT_LATEST_TAG=$(git describe --tags --abbrev=0 2> /dev/null || echo "")
+          [ -z "$COMMIT_LATEST_TAG" ] || echo "COMMIT_LATEST_TAG=$COMMIT_LATEST_TAG" >> $GITHUB_ENV
+          [ -z "$COMMIT_LATEST_TAG" ] || echo "COMMIT_LATEST_TAG=$COMMIT_LATEST_TAG" >> $GITHUB_OUTPUT
+
+          [ "$GITHUB_REF_TYPE" == "tag" ] && COMMIT_TAG="$GITHUB_REF_NAME" || COMMIT_TAG=""
+          [ -z "$COMMIT_TAG" ] && echo "COMMIT_TYPE=dev" >> $GITHUB_ENV    || echo "COMMIT_TAG=$COMMIT_TAG" >> $GITHUB_ENV
+          [ -z "$COMMIT_TAG" ] && echo "COMMIT_TYPE=dev" >> $GITHUB_OUTPUT || echo "COMMIT_TAG=$COMMIT_TAG" >> $GITHUB_OUTPUT
+
+          COMMIT_VERSION="${COMMIT_TAG:-${COMMIT_LATEST_TAG}}"
+          [ -z "$COMMIT_VERSION" ] || echo "COMMIT_VERSION=$COMMIT_VERSION" >> $GITHUB_ENV
+          [ -z "$COMMIT_VERSION" ] || echo "COMMIT_VERSION=$COMMIT_VERSION" >> $GITHUB_OUTPUT
+
+      - id: anaconda
+        name: Set Package Name, Version and Label
+        run: |
+          [ -n "$COMMIT_TYPE" ] && COMMIT_TYPE="-$COMMIT_TYPE"
+          echo $COMMIT_VERSION
+          [[ $COMMIT_VERSION == *-* ]] && ANACONDA_LABEL=${COMMIT_VERSION#*-} || ANACONDA_LABEL=""
+
+          ANACONDA_PACKAGE=$(basename `git rev-parse --show-toplevel` | sed 's,-feedstock,,g')
+          echo "ANACONDA_PACKAGE=$ANACONDA_PACKAGE" >> $GITHUB_ENV
+          echo "ANACONDA_PACKAGE=$ANACONDA_PACKAGE" >> $GITHUB_OUTPUT
+          
+          ANACONDA_LABEL=${ANACONDA_LABEL:-main}
+          echo "ANACONDA_LABEL=$ANACONDA_LABEL" >> $GITHUB_ENV
+          echo "ANACONDA_LABEL=$ANACONDA_LABEL" >> $GITHUB_OUTPUT
+
+          ANACONDA_VERSION=${COMMIT_VERSION//-/.}
+          ANACONDA_VERSION=${ANACONDA_VERSION:-0.0.0}${COMMIT_TYPE//-/.}
+          echo "ANACONDA_VERSION=$ANACONDA_VERSION" >> $GITHUB_ENV
+          echo "ANACONDA_VERSION=$ANACONDA_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Print GitHub Context as JSON 
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: |
+          echo "$GITHUB_CONTEXT"
+          
+      - name: Print Environment
+        run: |
+          env
+
+      - name: Job Summary
+        if: success()
+        run: |
+          echo "## ♻️ Environment Setup Complete" >> $GITHUB_STEP_SUMMARY
+          echo "The environment has been set up successfully and is ready for the build process." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### ⚛️ Git Information Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${COMMIT_SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Latest Tag:** \`${COMMIT_LATEST_TAG}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Requested Tag:** \`${COMMIT_TAG}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📦 Package Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Name:** \`${ANACONDA_PACKAGE}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** \`${ANACONDA_VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Label:** \`${ANACONDA_LABEL}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 🔧 Build Environment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- Platform: \`$(uname -a)\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Python version: \`$(python --version)\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Conda version: \`$(conda --version)\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "🎉 **The environment is successfully configured and all requirements are met.**" >> $GITHUB_STEP_SUMMARY
+  
+  build:
+    runs-on: ubuntu-latest
+    needs: env
+    steps:
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+          
+      - name: Install Forge & Tools
+        run: |
+          /usr/share/miniconda/bin/conda install -c conda-forge -y conda-smithy conda-verify conda-package-handling
+          /usr/share/miniconda/bin/conda config --add channels defaults
+          /usr/share/miniconda/bin/conda config --add channels conda-forge
+          /usr/share/miniconda/bin/conda config --add channels hep-forge
+          
+      - name: Build Package
+        env:
+          COMMIT_LATEST_TAG: ${{needs.env.outputs.COMMIT_LATEST_TAG}}
+          COMMIT_VERSION: ${{needs.env.outputs.COMMIT_VERSION}} 
+          COMMIT_TYPE: ${{ needs.env.outputs.COMMIT_TYPE }}
+          COMMIT_SHA: ${{needs.env.outputs.COMMIT_SHA}}
+          COMMIT_TAG: ${{needs.env.outputs.COMMIT_TAG}}
+
+          ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
+          ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
+          ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
+        run: |
+          /usr/share/miniconda/bin/conda build recipe --output-folder pkgs
+          for PKG in $(find pkgs -name "*.tar.bz2"); do  
+              /usr/share/miniconda/bin/cph transmute $PKG .conda
+          done
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: conda-packages
+          path: pkgs/*/*.conda
+
+      - name: Job Summary
+        if: success()
+        env:
+          ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
+          ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
+          ANACONDA_LABEL: ${{ needs.env.outputs.ANACONDA_LABEL }}
+        run: |
+          echo "## 🎉 Build and Upload Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📦 Package Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package Name:** \`${ANACONDA_PACKAGE}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** \`${ANACONDA_VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Label:** \`${ANACONDA_LABEL}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Variants:** $(echo "${PACKAGE_PATH}" | wc -l)" >> $GITHUB_STEP_SUMMARY
+          for PACKAGE_PATH in $(find pkgs -name "*.conda" | sort); do
+              PACKAGE_SIZE=$(stat -c%s "$PACKAGE_PATH")
+              echo "  * \`$(basename ${PACKAGE_PATH})\` ~ $((${PACKAGE_SIZE:-0} / 1024))KB" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [env, build]
+    steps:
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: conda-packages
+          path: pkgs
+
+      - name: Install Forge & Tools
+        run: |
+          /usr/share/miniconda/bin/conda install -c conda-forge -y anaconda-client
+
+      - name: Upload to Anaconda
+        env:
+          ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
+          ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
+          ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
+          ANACONDA_TOKEN:   ${{ secrets.ANACONDA_TOKEN }}
+        run: |
+          [ -z "$ANACONDA_VERSION" ] && exit 1
+          for CONDA in $(find pkgs -name "*.conda" | sort); do         
+            /usr/share/miniconda/bin/anaconda -t $ANACONDA_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
+          done
+
+      - name: Job Summary
+        if: success() 
+        env:
+          ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
+          ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
+          ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
+          ANACONDA_TOKEN:   ${{ secrets.ANACONDA_TOKEN }}
+        run: |
+
+          echo "### 📥 Package Location" >> $GITHUB_STEP_SUMMARY
+          echo "- https://anaconda.org/${GITHUB_REPOSITORY_OWNER}/${ANACONDA_PACKAGE}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## 🎉 Congratulations!" >> $GITHUB_STEP_SUMMARY
+          echo "Package \`${ANACONDA_PACKAGE}@${ANACONDA_VERSION}\` just got successfully uploaded with \"$ANACONDA_LABEL\" label!" >> $GITHUB_STEP_SUMMARY
