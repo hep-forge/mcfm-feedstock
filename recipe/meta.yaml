@@ -46,7 +46,7 @@ requirements:
 test:
   commands:
     - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini"
-    - mcfm $PREFIX/share/mcfm/input.ini 
+    - cd $PREFIX/share/mcfm && mcfm
 
 about:
   home: "https://mcfm.fnal.gov"
