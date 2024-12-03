@@ -43,6 +43,11 @@ requirements:
     - mpi
     - mpich
 
+test:
+  commands:
+    - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini"
+    - mcfm $PREFIX/share/mcfm/input.ini 
+
 about:
   home: "https://mcfm.fnal.gov"
   license: "GPL-3.0"
