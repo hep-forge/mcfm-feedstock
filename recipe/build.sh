@@ -5,7 +5,7 @@ if [ -d MCFM-* ]; then
     rm -rf MCFM-*
 fi
 
-export LD=$FC
+export LD=$FC # prevent using LD in handyG
 ln -s $BUILD_PREFIX/include/* ./src/Inc/
 
 mkdir build
