@@ -17,8 +17,6 @@ source:
   {% if versions.get(version, None) %}
   sha256: {{ versions.get(version) }}
   {% endif %}
-  patches:
-    - patches/handyG.patch
 
 requirements:
   build:
