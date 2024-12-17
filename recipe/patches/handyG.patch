@@ -1,0 +1,38 @@
+diff --git a/lib/handyG/configure b/lib/handyG/configure
+index 087aeb1..e48dbf6 100755
+--- a/lib/handyG/configure
++++ b/lib/handyG/configure
+@@ -890,8 +890,8 @@ build/%.o: src/%.cpp
+ 		@\$(CC) \$(CXXFLAGS) -c \$<  -o \$@
+ 
+ geval: libhandyg.a build/geval.o
+-		@echo "LD \$@"
+-		@\$(LD) `$STATIC && echo "--static" || true` -o \$@ build/geval.o -L. -lhandyg \$(LFLAGS)
++#		@echo "LD \$@"
++#		@\$(LD) `$STATIC && echo "--static" || true` -o \$@ build/geval.o -L. -lhandyg \$(LFLAGS)
+ 
+ EOF
+ 
+@@ -906,8 +906,8 @@ build/mathlink.o: build/mathlink.tm.c
+ 		@\$(CC) \$(MCFLAGS) \$(CFLAGS) -o \$@ -c \$<
+ 
+ handyG: build/mathlink.o libhandyg.a
+-		@echo "LD \$@"
+-		@\$(LD)  `$STATIC && echo "--static" || true` \$< libhandyg.a -o \$@ \$(LFLAGS) \$(MLFLAGS)
++#		@echo "LD \$@"
++#		@\$(LD)  `$STATIC && echo "--static" || true` \$< libhandyg.a -o \$@ \$(LFLAGS) \$(MLFLAGS)
+ 
+ 
+ EOF
+@@ -926,8 +926,8 @@ cat  >> makefile <<EOF
+ build/test.o: checks/test.f90 \$(testdep)
+ 
+ test: \$(objects) \$(testdep) build/test.o
+-		@echo "LD \$@"
+-		@\$(LD) -o \$@ \$^ \$(LFLAGS)
++#		@echo "LD \$@"
++#		@\$(LD) -o \$@ \$^ \$(LFLAGS)
+ 
+ install: libhandyg.a handyg.mod ${CONF_MPREP:+handyG} geval
+ 		mkdir -p \$(PREFIX)
+-- 
