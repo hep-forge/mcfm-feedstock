@@ -65,15 +65,15 @@ jobs:
 
       - name: Anaconda Package Removal
         env:
-          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
           ANACONDA_USER:  ${{ github.repository_owner }}
         run: |
 
           echo "## 🗑️ Removing Package" >> $GITHUB_STEP_SUMMARY
           echo "Removing package ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}" >> $GITHUB_STEP_SUMMARY
-          /usr/share/miniconda/bin/anaconda -t $ANACONDA_TOKEN remove --force ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}
+          /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN remove --force ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}
           echo "Removing package ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}.dev" >> $GITHUB_STEP_SUMMARY
-          /usr/share/miniconda/bin/anaconda -t $ANACONDA_TOKEN remove --force ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}.dev
+          /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN remove --force ${ANACONDA_USER}/${ANACONDA_PACKAGE}/${ANACONDA_VERSION}.dev
 
           echo "### 📥 Package Location" >> $GITHUB_STEP_SUMMARY
           echo "- https://anaconda.org/${GITHUB_REPOSITORY_OWNER}/${ANACONDA_PACKAGE}" >> $GITHUB_STEP_SUMMARY

@@ -2,8 +2,9 @@ name: Anaconda Build & Upload
 
 on:
   push:
-    branches:
-      - '**'
+# (for debugging)
+#    branches:
+#      - '**'
     tags:
       - '*'
 
@@ -187,11 +188,11 @@ jobs:
           ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
           ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
-          ANACONDA_TOKEN:   ${{ secrets.ANACONDA_TOKEN }}
+          ANACONDA_API_TOKEN:   ${{ secrets.ANACONDA_API_TOKEN }}
         run: |
           [ -z "$ANACONDA_VERSION" ] && exit 1
           for CONDA in $(find pkgs -name "*.conda" | sort); do         
-            /usr/share/miniconda/bin/anaconda -t $ANACONDA_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
+            /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
           done
 
       - name: Job Summary
@@ -200,7 +201,7 @@ jobs:
           ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
           ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
-          ANACONDA_TOKEN:   ${{ secrets.ANACONDA_TOKEN }}
+          ANACONDA_API_TOKEN:   ${{ secrets.ANACONDA_API_TOKEN }}
         run: |
 
           echo "### 📥 Package Location" >> $GITHUB_STEP_SUMMARY
