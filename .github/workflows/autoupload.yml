@@ -1,4 +1,4 @@
-name: Anaconda Build & Upload (ARM64)
+name: Anaconda Build & Upload
 
 on:
   push:
@@ -26,8 +26,8 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-          
-      - id: git 
+
+      - id: git
         name: Fetch Git Repository Information
         run: |
           COMMIT_SHA=$(git rev-parse HEAD || exit 1)
@@ -46,11 +46,10 @@ jobs:
           [ -z "$COMMIT_VERSION" ] || echo "COMMIT_VERSION=$COMMIT_VERSION" >> $GITHUB_ENV
           [ -z "$COMMIT_VERSION" ] || echo "COMMIT_VERSION=$COMMIT_VERSION" >> $GITHUB_OUTPUT
 
-      - id: anaconda 
+      - id: anaconda
         name: Set Package Name, Version and Label
         run: |
           [ -n "$COMMIT_TYPE" ] && COMMIT_TYPE="-$COMMIT_TYPE"
-          [[ $COMMIT_VERSION == *-* ]] && ANACONDA_LABEL=${COMMIT_VERSION#*-} || ANACONDA_LABEL=""
 
           ANACONDA_PACKAGE=$(basename `git rev-parse --show-toplevel` | sed 's,-feedstock,,g')
           echo "ANACONDA_PACKAGE=$ANACONDA_PACKAGE" >> $GITHUB_ENV
@@ -62,18 +61,18 @@ jobs:
           ANACONDA_LABEL="${ANACONDA_LABEL:-main}"
           echo "ANACONDA_LABEL=$ANACONDA_LABEL" >> $GITHUB_ENV
           echo "ANACONDA_LABEL=$ANACONDA_LABEL" >> $GITHUB_OUTPUT
-          
+
           ANACONDA_VERSION=${COMMIT_VERSION//-/.}
           ANACONDA_VERSION=${ANACONDA_VERSION:-0.0.0}${COMMIT_TYPE//-/.}
           echo "ANACONDA_VERSION=$ANACONDA_VERSION" >> $GITHUB_ENV
           echo "ANACONDA_VERSION=$ANACONDA_VERSION" >> $GITHUB_OUTPUT
 
-      - name: Print GitHub Context as JSON 
+      - name: Print GitHub Context as JSON
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
         run: |
           echo "$GITHUB_CONTEXT"
-          
+
       - name: Print Environment
         run: |
           env
@@ -90,32 +89,45 @@ jobs:
           echo "- **Latest Tag:** \`${COMMIT_LATEST_TAG}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Requested Tag:** \`${COMMIT_TAG}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "### 📦 Package Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Name:** \`${ANACONDA_PACKAGE}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** \`${ANACONDA_VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Label:** \`${ANACONDA_LABEL}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          echo "### 🔧 Build Environment Details" >> $GITHUB_STEP_SUMMARY
-          echo "- Platform: \`$(uname -a)\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Python version: \`$(python --version)\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Conda version: \`$(conda --version)\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
           echo "🎉 **The environment is successfully configured and all requirements are met.**" >> $GITHUB_STEP_SUMMARY
-  
-  build-linux-arm64:
-    runs-on: ubuntu-24.04-arm
-    needs: env
-    steps:
-      # not supported yet for arm64
-      # - name: Set up Conda
-      #   uses: conda-incubator/setup-miniconda@v2
-      #   with:
-      #     auto-update-conda: true
 
-      - name: Install Miniforge (ARM64)
+  # Single matrix job -> shows as 3 parallel branches (amd64 / arm64 / macos-arm64)
+  # in the Actions run graph instead of 3 separate workflow files.
+  build:
+    needs: env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: amd64
+            runs-on: ubuntu-24.04
+            os: linux
+          - id: arm64
+            runs-on: ubuntu-24.04-arm
+            os: linux
+          - id: macos-arm64
+            runs-on: macos-14
+            os: macos
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Conda (AMD64)
+        if: matrix.id == 'amd64'
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+
+      - name: Install Miniforge (Linux ARM64)
+        if: matrix.id == 'arm64'
         run: |
           wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh -O $HOME/miniforge.sh
           bash $HOME/miniforge.sh -b -p $HOME/miniconda
@@ -124,36 +136,60 @@ jobs:
           conda init bash
           conda update -n base -c defaults conda
 
+      - name: Install Miniforge (macOS ARM64)
+        if: matrix.id == 'macos-arm64'
+        run: |
+          curl -L https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh -o $HOME/miniforge.sh
+          bash $HOME/miniforge.sh -b -p $HOME/miniconda
+          echo "$HOME/miniconda/bin" >> $GITHUB_PATH
+          source $HOME/miniconda/etc/profile.d/conda.sh
+          conda init bash
+          conda update -n base -c defaults conda
+
+      - name: Resolve Conda Prefix
+        id: conda
+        run: |
+          if [ "${{ matrix.id }}" = "amd64" ]; then
+            echo "PREFIX=/usr/share/miniconda" >> $GITHUB_OUTPUT
+          else
+            echo "PREFIX=$HOME/miniconda" >> $GITHUB_OUTPUT
+          fi
+
       - name: Install Forge & Tools
         run: |
-          $HOME/miniconda/bin/conda install -c conda-forge -y "python=3.10" conda-smithy conda-verify conda-package-handling
-          $HOME/miniconda/bin/conda config --add channels defaults
-          $HOME/miniconda/bin/conda config --add channels conda-forge
-          $HOME/miniconda/bin/conda config --add channels hep-forge
-          
-      - name: Checkout Code
-        uses: actions/checkout@v4
-          
+          if [ "${{ matrix.id }}" = "amd64" ]; then
+            "${{ steps.conda.outputs.PREFIX }}/bin/conda" install -c conda-forge -y conda-smithy conda-verify conda-package-handling
+          else
+            # pin python for the tooling env: "latest" Miniforge ships a python
+            # too new for conda-verify's build pins (see LibMambaUnsatisfiableError)
+            "${{ steps.conda.outputs.PREFIX }}/bin/conda" install -c conda-forge -y "python=3.10" conda-smithy conda-verify conda-package-handling
+          fi
+          "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --set channel_priority strict
+          "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --add channels defaults
+          "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --add channels conda-forge
+          "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --add channels hep-forge
+
       - name: Build Package
         env:
-          COMMIT_LATEST_TAG: ${{needs.env.outputs.COMMIT_LATEST_TAG}}
-          COMMIT_VERSION: ${{needs.env.outputs.COMMIT_VERSION}} 
+          COMMIT_LATEST_TAG: ${{ needs.env.outputs.COMMIT_LATEST_TAG }}
+          COMMIT_VERSION: ${{ needs.env.outputs.COMMIT_VERSION }}
           COMMIT_TYPE: ${{ needs.env.outputs.COMMIT_TYPE }}
-          COMMIT_SHA: ${{needs.env.outputs.COMMIT_SHA}}
-          COMMIT_TAG: ${{needs.env.outputs.COMMIT_TAG}}
+          COMMIT_SHA: ${{ needs.env.outputs.COMMIT_SHA }}
+          COMMIT_TAG: ${{ needs.env.outputs.COMMIT_TAG }}
 
-          ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
+          ANACONDA_LABEL: ${{ needs.env.outputs.ANACONDA_LABEL }}
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
           ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
         run: |
-          ~/miniconda/bin/conda build recipe --output-folder pkgs
-          for PKG in $(find pkgs -name "*.tar.bz2"); do  
-              ~/miniconda/bin/cph transmute $PKG .conda
+          "${{ steps.conda.outputs.PREFIX }}/bin/conda" build recipe --output-folder pkgs
+          for PKG in $(find pkgs -name "*.tar.bz2"); do
+              "${{ steps.conda.outputs.PREFIX }}/bin/cph" transmute $PKG .conda
           done
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: conda-packages-arm64
+          name: conda-packages-${{ matrix.id }}
           path: pkgs/*/*.conda
 
       - name: Job Summary
@@ -163,30 +199,29 @@ jobs:
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
           ANACONDA_LABEL: ${{ needs.env.outputs.ANACONDA_LABEL }}
         run: |
-          echo "## 🎉 Build and Upload Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎉 Build Summary (${{ matrix.id }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "### 📦 Package Details" >> $GITHUB_STEP_SUMMARY
           echo "- **Package Name:** \`${ANACONDA_PACKAGE}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** \`${ANACONDA_VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Label:** \`${ANACONDA_LABEL}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Variants:** $(echo "${PACKAGE_PATH}" | wc -l)" >> $GITHUB_STEP_SUMMARY
           for PACKAGE_PATH in $(find pkgs -name "*.conda" | sort); do
-              PACKAGE_SIZE=$(stat -c%s "$PACKAGE_PATH")
+              PACKAGE_SIZE=$(stat -f%z "$PACKAGE_PATH" 2>/dev/null || stat -c%s "$PACKAGE_PATH")
               echo "  * \`$(basename ${PACKAGE_PATH})\` ~ $((${PACKAGE_SIZE:-0} / 1024))KB" >> $GITHUB_STEP_SUMMARY
           done
           echo "" >> $GITHUB_STEP_SUMMARY
 
   publish:
     runs-on: ubuntu-latest
-    needs: [env, build-linux-arm64]
+    needs: [env, build]
     steps:
-
-      - name: Download ARM64 Artifacts
+      - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: conda-packages-arm64
-          path: pkgs-arm64
+          pattern: conda-packages-*
+          path: pkgs-all
+          merge-multiple: true
 
       - name: Install Forge & Tools
         run: |
@@ -196,27 +231,27 @@ jobs:
         env:
           ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
-          ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
-          ANACONDA_API_TOKEN:   ${{ secrets.ANACONDA_API_TOKEN }}
+          ANACONDA_LABEL: ${{ needs.env.outputs.ANACONDA_LABEL }}
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
         run: |
           [ -z "$ANACONDA_VERSION" ] && exit 1
-          [ "$ANACONDA_VERSION" = "0.0.0" ] && { echo "Skipping dev build (no version tag)"; exit 0; }
-          for CONDA in $(find pkgs-arm64 -name "*.conda" | sort); do         
+          case "$ANACONDA_VERSION" in
+            0.0.0*) echo "Skipping dev build (no version tag)"; exit 0 ;;
+          esac
+          for CONDA in $(find pkgs-all -name "*.conda" | sort); do
             /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
           done
 
       - name: Job Summary
-        if: success() 
+        if: success()
         env:
           ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
-          ANACONDA_LABEL:   ${{ needs.env.outputs.ANACONDA_LABEL }}
-          ANACONDA_API_TOKEN:   ${{ secrets.ANACONDA_API_TOKEN }}
+          ANACONDA_LABEL: ${{ needs.env.outputs.ANACONDA_LABEL }}
         run: |
-
           echo "### 📥 Package Location" >> $GITHUB_STEP_SUMMARY
           echo "- https://anaconda.org/${GITHUB_REPOSITORY_OWNER}/${ANACONDA_PACKAGE}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "## 🎉 Congratulations!" >> $GITHUB_STEP_SUMMARY
-          echo "Package \`${ANACONDA_PACKAGE}@${ANACONDA_VERSION}\` just got successfully uploaded with \"$ANACONDA_LABEL\" label!" >> $GITHUB_STEP_SUMMARY
+          echo "Package \`${ANACONDA_PACKAGE}@${ANACONDA_VERSION}\` just got successfully uploaded with \"$ANACONDA_LABEL\" label (amd64 + arm64 + macos-arm64)!" >> $GITHUB_STEP_SUMMARY
