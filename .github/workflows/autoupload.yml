@@ -98,8 +98,8 @@ jobs:
 
           echo "🎉 **The environment is successfully configured and all requirements are met.**" >> $GITHUB_STEP_SUMMARY
 
-  # Single matrix job -> shows as 3 parallel branches (amd64 / arm64 / macos-arm64)
-  # in the Actions run graph instead of 3 separate workflow files.
+  # Single matrix job -> shows as 2 parallel branches (amd64 / arm64)
+  # in the Actions run graph instead of 2 separate workflow files.
   build:
     needs: env
     strategy:
@@ -112,9 +112,6 @@ jobs:
           - id: arm64
             runs-on: ubuntu-24.04-arm
             os: linux
-          - id: macos-arm64
-            runs-on: macos-14
-            os: macos
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Checkout Code
@@ -130,16 +127,6 @@ jobs:
         if: matrix.id == 'arm64'
         run: |
           wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh -O $HOME/miniforge.sh
-          bash $HOME/miniforge.sh -b -p $HOME/miniconda
-          echo "$HOME/miniconda/bin" >> $GITHUB_PATH
-          source $HOME/miniconda/etc/profile.d/conda.sh
-          conda init bash
-          conda update -n base -c defaults conda
-
-      - name: Install Miniforge (macOS ARM64)
-        if: matrix.id == 'macos-arm64'
-        run: |
-          curl -L https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh -o $HOME/miniforge.sh
           bash $HOME/miniforge.sh -b -p $HOME/miniconda
           echo "$HOME/miniconda/bin" >> $GITHUB_PATH
           source $HOME/miniconda/etc/profile.d/conda.sh
@@ -254,4 +241,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "## 🎉 Congratulations!" >> $GITHUB_STEP_SUMMARY
-          echo "Package \`${ANACONDA_PACKAGE}@${ANACONDA_VERSION}\` just got successfully uploaded with \"$ANACONDA_LABEL\" label (amd64 + arm64 + macos-arm64)!" >> $GITHUB_STEP_SUMMARY
+          echo "Package \`${ANACONDA_PACKAGE}@${ANACONDA_VERSION}\` just got successfully uploaded with \"$ANACONDA_LABEL\" label (amd64 + arm64)!" >> $GITHUB_STEP_SUMMARY

@@ -1,5 +1,4 @@
 build_platform:
-  osx_arm64: osx_arm64
   linux_aarch64: linux_aarch64
 channels:
   sources:
@@ -17,7 +16,6 @@ github:
 provider:
   linux_64: github_actions
   linux_aarch64: github_actions
-  osx_arm64: github_actions
   osx_64: None
   win_64: None
   linux_ppc64le: None
