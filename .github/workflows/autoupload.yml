@@ -170,6 +170,12 @@ jobs:
 
       - name: Build Package
         env:
+          # CMake 4 removed compat with cmake_minimum_required(<3.5);
+          # several upstreams (qcdloop, cernlib, bundled pybind11, ...)
+          # still declare ancient minimums. This env var restores the
+          # old behavior without patching every recipe.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
           COMMIT_LATEST_TAG: ${{ needs.env.outputs.COMMIT_LATEST_TAG }}
           COMMIT_VERSION: ${{ needs.env.outputs.COMMIT_VERSION }}
           COMMIT_TYPE: ${{ needs.env.outputs.COMMIT_TYPE }}
@@ -215,7 +221,10 @@ jobs:
 
   publish:
     # Upload only tag builds: debug/branch builds stop at artifacts.
-    if: github.ref_type == 'tag'
+    # always(): a failed leg must not block publishing the other one --
+    # amd64 and arm64 converge independently; rerunning the failed leg
+    # later re-publishes it.
+    if: always() && github.ref_type == 'tag' && needs.env.result == 'success'
     runs-on: ubuntu-latest
     needs: [env, build]
     steps:
@@ -223,7 +232,10 @@ jobs:
       # produce the same noarch/<pkg>.conda path, and extracting two
       # artifacts onto one path races (seen as "Is this a valid conda
       # package?" on upload). Keep legs in separate dirs and dedupe below.
+      # continue-on-error: with every leg failed there are no artifacts,
+      # and the upload loop below simply finds nothing.
       - name: Download All Artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: conda-packages-*
