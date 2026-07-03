@@ -170,12 +170,10 @@ jobs:
 
       - name: Build Package
         env:
-          # CMake 4 removed compat with cmake_minimum_required(<3.5);
-          # several upstreams (qcdloop, cernlib, bundled pybind11, ...)
-          # still declare ancient minimums. This env var restores the
-          # old behavior without patching every recipe.
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-
+          # NOTE: conda-build filters the environment; CI-level vars do
+          # NOT reach build scripts. Recipes needing e.g.
+          # CMAKE_POLICY_VERSION_MINIMUM=3.5 (CMake 4 vs old upstreams)
+          # must export it in their own build.sh.
           COMMIT_LATEST_TAG: ${{ needs.env.outputs.COMMIT_LATEST_TAG }}
           COMMIT_VERSION: ${{ needs.env.outputs.COMMIT_VERSION }}
           COMMIT_TYPE: ${{ needs.env.outputs.COMMIT_TYPE }}
