@@ -4,10 +4,18 @@ on:
   push:
     tags:
       - '[0-9]*'         # only version-like tags (e.g. 3.5.1, 1.056)
-  workflow_dispatch:     # allow manual builds from Actions UI / IDE
+  workflow_dispatch:     # manual builds: tag refs always allowed, branch
+    inputs:              # refs only when debug is enabled (never uploaded)
+      debug:
+        description: "Debug build: allow running on a branch (artifacts only, no Anaconda upload)"
+        type: boolean
+        default: false
 
 jobs:
   env:
+    # Policy: build tags. Branch (dev) builds only via manual dispatch
+    # with debug enabled -- and those never reach the publish job below.
+    if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.debug)
     runs-on: ubuntu-latest
     outputs:
       COMMIT_SHA: ${{ steps.git.outputs.COMMIT_SHA }}
@@ -58,6 +66,11 @@ jobs:
           ANACONDA_LABEL="${{ github.event.base_ref != '' && github.event.base_ref != 'null' && github.event.base_ref || github.ref }}"
           ANACONDA_LABEL="${ANACONDA_LABEL#refs/heads/}"
           ANACONDA_LABEL="${ANACONDA_LABEL#refs/tags/}"
+          # Labels track branches; a run dispatched at a tag ref has no
+          # branch, so fall back to the default branch instead of the tag.
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$ANACONDA_LABEL" = "$GITHUB_REF_NAME" ]; then
+            ANACONDA_LABEL="${{ github.event.repository.default_branch }}"
+          fi
           ANACONDA_LABEL="${ANACONDA_LABEL:-main}"
           echo "ANACONDA_LABEL=$ANACONDA_LABEL" >> $GITHUB_ENV
           echo "ANACONDA_LABEL=$ANACONDA_LABEL" >> $GITHUB_OUTPUT
@@ -169,8 +182,10 @@ jobs:
           ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
         run: |
           "${{ steps.conda.outputs.PREFIX }}/bin/conda" build recipe --output-folder pkgs
+          # --out-folder: cph writes to the CWD by default, which would
+          # drop the .conda outside the pkgs/*/ artifact glob
           for PKG in $(find pkgs -name "*.tar.bz2"); do
-              "${{ steps.conda.outputs.PREFIX }}/bin/cph" transmute $PKG .conda
+              "${{ steps.conda.outputs.PREFIX }}/bin/cph" transmute $PKG .conda --out-folder "$(dirname $PKG)"
           done
 
       - name: Upload Artifacts
@@ -200,15 +215,20 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
   publish:
+    # Upload only tag builds: debug/branch builds stop at artifacts.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     needs: [env, build]
     steps:
+      # merge-multiple would corrupt noarch packages: both build legs
+      # produce the same noarch/<pkg>.conda path, and extracting two
+      # artifacts onto one path races (seen as "Is this a valid conda
+      # package?" on upload). Keep legs in separate dirs and dedupe below.
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: conda-packages-*
           path: pkgs-all
-          merge-multiple: true
 
       - name: Install Forge & Tools
         run: |
@@ -223,9 +243,15 @@ jobs:
         run: |
           [ -z "$ANACONDA_VERSION" ] && exit 1
           case "$ANACONDA_VERSION" in
-            0.0.0*) echo "Skipping dev build (no version tag)"; exit 0 ;;
+            *dev*|0.0.0*) echo "Refusing to upload dev build ($ANACONDA_VERSION)"; exit 0 ;;
           esac
+          # Dedupe by subdir/filename: noarch packages are built
+          # identically by both legs and must be uploaded once.
+          declare -A SEEN
           for CONDA in $(find pkgs-all -name "*.conda" | sort); do
+            KEY="$(basename "$(dirname "$CONDA")")/$(basename "$CONDA")"
+            [ -n "${SEEN[$KEY]:-}" ] && { echo "Skipping duplicate $KEY"; continue; }
+            SEEN[$KEY]=1
             /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
           done
 
