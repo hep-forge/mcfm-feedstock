@@ -157,13 +157,12 @@ jobs:
 
       - name: Install Forge & Tools
         run: |
-          if [ "${{ matrix.id }}" = "amd64" ]; then
-            "${{ steps.conda.outputs.PREFIX }}/bin/conda" install -c conda-forge -y conda-smithy conda-verify conda-package-handling
-          else
-            # pin python for the tooling env: "latest" Miniforge ships a python
-            # too new for conda-verify's build pins (see LibMambaUnsatisfiableError)
-            "${{ steps.conda.outputs.PREFIX }}/bin/conda" install -c conda-forge -y "python=3.10" conda-smithy conda-verify conda-package-handling
-          fi
+          # Same tooling on both legs: the old python=3.10 pin (needed only
+          # by conda-verify) left arm64 with an outdated conda-build that
+          # produced .tar.bz2 packages and crashed on self run_exports
+          # ("<pkg> cannot depend on itself"). conda-smithy/conda-verify are
+          # not used by this workflow.
+          "${{ steps.conda.outputs.PREFIX }}/bin/conda" install -c conda-forge -y conda-build conda-package-handling
           "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --set channel_priority strict
           "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --add channels defaults
           "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --add channels conda-forge
