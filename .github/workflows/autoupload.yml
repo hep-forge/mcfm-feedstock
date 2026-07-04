@@ -256,12 +256,22 @@ jobs:
           # Dedupe by subdir/filename: noarch packages are built
           # identically by both legs and must be uploaded once.
           declare -A SEEN
+          UPLOADED=0
           for CONDA in $(find pkgs-all -name "*.conda" | sort); do
             KEY="$(basename "$(dirname "$CONDA")")/$(basename "$CONDA")"
             [ -n "${SEEN[$KEY]:-}" ] && { echo "Skipping duplicate $KEY"; continue; }
             SEEN[$KEY]=1
             /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
+            UPLOADED=$((UPLOADED + 1))
           done
+          # Both build legs failing leaves download-artifact (continue-on-error)
+          # with nothing, so this loop silently iterates zero times -- without
+          # this check the step (and the whole publish job) reports a
+          # misleading "success" despite publishing nothing.
+          if [ "$UPLOADED" -eq 0 ]; then
+            echo "::error::No .conda packages found to upload -- both build legs must have failed."
+            exit 1
+          fi
 
       # anaconda.org free tier has limited storage: after each release,
       # delete this package's old versions. Kept are (a) the newest
@@ -269,7 +279,10 @@ jobs:
       # file carrying a label other than main/master -- that protects the
       # branch-line labels (legacy, eic, cern, old, ...) and the explicit
       # "keep" label. Protect a version forever with:
-      #   anaconda label --organization hep-forge --copy main keep  (UI works too)
+      #   anaconda copy <org>/<pkg>/<version> --from-label main --to-label keep
+      # (the org-wide `anaconda label` command has no per-version scoping;
+      # `copy` with a 3-part spec -- no filename -- copies every file of
+      # that version to the new label. UI works too.)
       # Everything else, including retired *dev* uploads, is removed.
       - name: Trim Old Versions
         env:
@@ -291,9 +304,18 @@ jobs:
           for f in data.get("files", []):
               labels_of.setdefault(f.get("version", ""), set()).update(f.get("labels", []))
           versions = [v for v in labels_of if v]
-          releases = sorted((v for v in versions if "dev" not in v), key=vkey, reverse=True)
+          # Only numeric versions are releases; branch-named junk versions
+          # (master/latest/beta) trim away like dev builds. A package with
+          # no numeric release yet keeps its newest non-dev version.
+          releases = sorted(
+              (v for v in versions if "dev" not in v and re.match(r"^\d", v)),
+              key=vkey, reverse=True)
           protect = set(releases[:keep_n])
           protect |= {v for v in versions if labels_of[v] - {"main", "master"}}
+          if not releases:
+              fallback = [v for v in versions if "dev" not in v]
+              if fallback:
+                  protect.add(max(fallback, key=vkey))
           for v in sorted(versions, key=vkey, reverse=True):
               action = "KEEP" if v in protect else "DELETE"
               print(f"{action} {org}/{pkg}/{v}")
