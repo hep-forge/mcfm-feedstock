@@ -4,18 +4,16 @@ on:
   push:
     tags:
       - '[0-9]*'         # only version-like tags (e.g. 3.5.1, 1.056)
-  workflow_dispatch:     # manual builds: tag refs always allowed, branch
-    inputs:              # refs only when debug is enabled (never uploaded)
-      debug:
-        description: "Debug build: allow running on a branch (artifacts only, no Anaconda upload)"
-        type: boolean
-        default: false
+  workflow_dispatch:     # manual builds: only run if the ref picked in the
+                         # UI/API is itself a tag (see the env job's `if:`)
 
 jobs:
   env:
-    # Policy: build tags. Branch (dev) builds only via manual dispatch
-    # with debug enabled -- and those never reach the publish job below.
-    if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.debug)
+    # Policy: tag refs only, full stop -- whether the run came from a tag
+    # push or from workflow_dispatch manually run AT a tag. Dispatching at
+    # a branch (main) no-ops: the run shows as skipped, nothing builds,
+    # nothing uploads. There is no branch/dev-build escape hatch.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     outputs:
       COMMIT_SHA: ${{ steps.git.outputs.COMMIT_SHA }}
@@ -218,7 +216,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
   publish:
-    # Upload only tag builds: debug/branch builds stop at artifacts.
+    # env already gated the whole run to tag refs; needs.env.result
+    # re-checks that in case this job is re-run in isolation.
     # always(): a failed leg must not block publishing the other one --
     # amd64 and arm64 converge independently; rerunning the failed leg
     # later re-publishes it.
@@ -262,6 +261,47 @@ jobs:
             [ -n "${SEEN[$KEY]:-}" ] && { echo "Skipping duplicate $KEY"; continue; }
             SEEN[$KEY]=1
             /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
+          done
+
+      # anaconda.org free tier has limited storage: after each release,
+      # delete this package's old versions. Kept are (a) the newest
+      # TRIM_KEEP non-dev versions and (b) any version with at least one
+      # file carrying a label other than main/master -- that protects the
+      # branch-line labels (legacy, eic, cern, old, ...) and the explicit
+      # "keep" label. Protect a version forever with:
+      #   anaconda label --organization hep-forge --copy main keep  (UI works too)
+      # Everything else, including retired *dev* uploads, is removed.
+      - name: Trim Old Versions
+        env:
+          ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+          TRIM_KEEP: "2"
+        run: |
+          python3 <<'PYEOF' > trim_plan.txt
+          import json, os, re, urllib.request
+
+          def vkey(v):
+              return [int(p) if p.isdigit() else -1 for p in re.split(r"[._-]", v)]
+
+          org, pkg = "${{ github.repository_owner }}", os.environ["ANACONDA_PACKAGE"]
+          keep_n = int(os.environ.get("TRIM_KEEP", "2"))
+          with urllib.request.urlopen(f"https://api.anaconda.org/package/{org}/{pkg}", timeout=30) as r:
+              data = json.load(r)
+          labels_of = {}
+          for f in data.get("files", []):
+              labels_of.setdefault(f.get("version", ""), set()).update(f.get("labels", []))
+          versions = [v for v in labels_of if v]
+          releases = sorted((v for v in versions if "dev" not in v), key=vkey, reverse=True)
+          protect = set(releases[:keep_n])
+          protect |= {v for v in versions if labels_of[v] - {"main", "master"}}
+          for v in sorted(versions, key=vkey, reverse=True):
+              action = "KEEP" if v in protect else "DELETE"
+              print(f"{action} {org}/{pkg}/{v}")
+          PYEOF
+          cat trim_plan.txt
+          grep "^DELETE " trim_plan.txt | awk '{print $2}' | while read SPEC; do
+            /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN remove --force "$SPEC" \
+              || echo "WARNING: failed to remove $SPEC"
           done
 
       - name: Job Summary
