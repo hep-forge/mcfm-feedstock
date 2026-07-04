@@ -225,6 +225,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [env, build]
     steps:
+      # needed so the Trim step can read recipe/meta.yaml's
+      # extra.keep_versions (this job has no other checkout).
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       # merge-multiple would corrupt noarch packages: both build legs
       # produce the same noarch/<pkg>.conda path, and extracting two
       # artifacts onto one path races (seen as "Is this a valid conda
@@ -275,10 +280,14 @@ jobs:
 
       # anaconda.org free tier has limited storage: after each release,
       # delete this package's old versions. Kept are (a) the newest
-      # TRIM_KEEP non-dev versions and (b) any version with at least one
-      # file carrying a label other than main/master -- that protects the
+      # TRIM_KEEP non-dev versions, (b) any version with at least one file
+      # carrying a label other than main/master -- that protects the
       # branch-line labels (legacy, eic, cern, old, ...) and the explicit
-      # "keep" label. Protect a version forever with:
+      # "keep" label -- and (c) any version listed in this recipe's
+      # recipe/meta.yaml under extra.keep_versions (for backward
+      # compatibility: e.g. root-feedstock pins old ROOT releases still
+      # required by downstream conda_build_config.yaml `root:` variants).
+      # Protect a version forever without a recipe change with:
       #   anaconda copy <org>/<pkg>/<version> --from-label main --to-label keep
       # (the org-wide `anaconda label` command has no per-version scoping;
       # `copy` with a 3-part spec -- no filename -- copies every file of
@@ -296,6 +305,25 @@ jobs:
           def vkey(v):
               return [int(p) if p.isdigit() else -1 for p in re.split(r"[._-]", v)]
 
+          def keep_versions_from_recipe():
+              # Regex, not a real YAML parser: meta.yaml is jinja-templated
+              # (yaml.safe_load would need pyyaml, not guaranteed present
+              # on this job's plain python3) and extra.keep_versions is
+              # always a simple flat list of quoted/bare version strings.
+              try:
+                  text = open("recipe/meta.yaml").read()
+              except OSError:
+                  return set()
+              m = re.search(r"^[ \t]*keep_versions:[ \t]*\n((?:[ \t]+-[ \t]*.+\n?)+)", text, re.MULTILINE)
+              if not m:
+                  return set()
+              out = set()
+              for line in m.group(1).splitlines():
+                  line = line.strip()
+                  if line.startswith("-"):
+                      out.add(line[1:].strip().strip('"').strip("'"))
+              return out
+
           org, pkg = "${{ github.repository_owner }}", os.environ["ANACONDA_PACKAGE"]
           keep_n = int(os.environ.get("TRIM_KEEP", "2"))
           with urllib.request.urlopen(f"https://api.anaconda.org/package/{org}/{pkg}", timeout=30) as r:
@@ -312,6 +340,7 @@ jobs:
               key=vkey, reverse=True)
           protect = set(releases[:keep_n])
           protect |= {v for v in versions if labels_of[v] - {"main", "master"}}
+          protect |= keep_versions_from_recipe() & set(versions)
           if not releases:
               fallback = [v for v in versions if "dev" not in v]
               if fallback:
