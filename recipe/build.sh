@@ -26,7 +26,12 @@ case "$PKG_VERSION" in
              TensorReduction/recur/smallF/obj_omp TensorReduction/recur/smallG/obj_omp \
              TensorReduction/recur/smallP/obj_omp TensorReduction/recur/smallY/obj_omp
 
-    (cd QCDLoop && make -f makefile_omp FC="${FC}")
+    # QCDLoop/makefile_omp's default target (`all: test`) links a
+    # throwaway test binary with a hardcoded `-lff` that doesn't match
+    # the `libff_omp.a` its own ffdir target just built (upstream bug in
+    # this vendored copy) -- build only the qldir/ffdir prerequisites we
+    # actually need (the .a files) and skip that broken link entirely.
+    (cd QCDLoop && make -f makefile_omp qldir ffdir FC="${FC}")
     (cd TensorReduction && make -f makefile_omp libs FC="${FC}")
 
     NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
