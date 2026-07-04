@@ -6,6 +6,12 @@ on:
       - '[0-9]*'         # only version-like tags (e.g. 3.5.1, 1.056)
   workflow_dispatch:     # manual builds: only run if the ref picked in the
                          # UI/API is itself a tag (see the env job's `if:`)
+    inputs:
+      triggered_by:
+        description: "Who/what dispatched this run (self-declared; hep-bot-rebuild.yml sets 'bot')"
+        type: choice
+        options: [manual, bot]
+        default: manual
 
 jobs:
   env:
@@ -27,6 +33,15 @@ jobs:
       ANACONDA_PACKAGE: ${{ steps.anaconda.outputs.ANACONDA_PACKAGE }}
 
     steps:
+      # GitHub's API has no field distinguishing a human's workflow_dispatch
+      # from an automated one (both are just event=workflow_dispatch from
+      # whichever token dispatched them) -- so this step's NAME embeds the
+      # trigger source, which the Jobs API (and scripts/status_arch.sh) can
+      # read back. Self-declared: hep-bot-rebuild.yml passes
+      # -f triggered_by=bot; anything else defaults to manual.
+      - name: "Triggered by: ${{ github.event_name == 'push' && 'push' || inputs.triggered_by || 'manual' }}"
+        run: 'true'
+
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
