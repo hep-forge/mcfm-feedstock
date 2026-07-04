@@ -12,11 +12,21 @@ package:
   name: {{ environ.get('ANACONDA_PACKAGE', "mcfm")|string|lower }}
   version: {{ environ.get('ANACONDA_VERSION', version)|replace('/', '.')|replace('-', '.') }}
 
+{% if version.startswith("6.") %}
 source:
-  url: "https://mcfm.fnal.gov/downloads/MCFM-{{ version }}.tar.gz"
-  {% if versions.get(version, None) %}
-  sha256: {{ versions.get(version) }}
-  {% endif %}
+  # HEPcodes/MCFM: GitHub mirror of MCFM 6.8. Source files for APPLgrid
+  # grid output already exist here (src/User/fill_APPLgrid.f,
+  # gridwrap.f/.cxx) but the makefile's GRID=APPLGRID hook is disabled
+  # and looks stale relative to those files -- not wired up yet. This
+  # version builds plain (no grid output); see build.sh.
+  git_url: "https://github.com/HEPcodes/MCFM"
+  git_rev: "40cee9d7915b0ad57f3476d2a5a5adf18dff267b"
+{% endif %}
+# 10.x (and 9.x) have NO source: url here -- mcfm.fnal.gov's WAF
+# returns 403 to conda-build's own downloader (a python-requests-style
+# user agent) but allows a bare curl with no explicit -A, verified
+# empirically, with stable/deterministic content across repeated
+# fetches. build.sh fetches it directly instead.
 #  patches: # applied in ./build.sh
 #    - patches/handyG.patch
 
@@ -25,30 +35,44 @@ requirements:
     - {{ compiler('gfortran') }}   # GNU Fortran compiler
     - {{ compiler('c') }}          # GNU C compiler
     - {{ compiler('cxx') }}        # GNU C++ compiler
-    
-    - cmake                        # Build system
+
+    - cmake                        # Build system (10.x)
     - make                         # Make utility
     - automake
     - autoconf
     - libtool
     - perl
+    {% if not version.startswith("6.") %}
     - mpi
     - mpich
+    {% endif %}
 
   host:
     - lhapdf
+    {% if not version.startswith("6.") %}
     - mpi
     - mpich
+    {% endif %}
 
   run:
     - lhapdf
+    {% if not version.startswith("6.") %}
     - mpi
     - mpich
+    {% endif %}
 
 test:
   commands:
+    {% if version.startswith("6.") %}
+    # 6.x uses a different run convention (process.DAT in the working
+    # dir, not input.ini) and no reference output to validate a real
+    # physics run against -- just check the binary is present and
+    # linked correctly for now.
+    - test -x $PREFIX/bin/mcfm
+    {% else %}
     - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini"
     - cd $PREFIX/share/mcfm && mcfm
+    {% endif %}
 
 about:
   home: "https://mcfm.fnal.gov"
