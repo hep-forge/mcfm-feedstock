@@ -294,15 +294,20 @@ jobs:
           fi
 
       # anaconda.org free tier has limited storage: after each release,
-      # delete this package's old versions. Kept are (a) the newest
-      # TRIM_KEEP non-dev versions, (b) any version with at least one file
-      # carrying a label other than main/master -- that protects the
-      # branch-line labels (legacy, eic, cern, old, ...) and the explicit
-      # "keep" label -- and (c) any version listed in this recipe's
-      # recipe/meta.yaml under extra.keep_versions (for backward
-      # compatibility: e.g. root-feedstock pins old ROOT releases still
-      # required by downstream conda_build_config.yaml `root:` variants).
-      # Protect a version forever without a recipe change with:
+      # trim this package's old versions -- INDEPENDENTLY PER BRANCH/LABEL.
+      # One branch = one Anaconda label (main, legacy, eic, cern, old, ...);
+      # each keeps its own newest TRIM_KEEP non-dev versions plus its own
+      # extra.keep_versions entries (recipe/meta.yaml, keyed by branch --
+      # e.g. root-feedstock pins old ROOT releases still required by
+      # downstream conda_build_config.yaml `root:` variants):
+      #   extra:
+      #     keep_versions:
+      #       main: ["6.34.10", "6.32.16"]
+      # A flat list (no branch keys) is still accepted for backward
+      # compat and is treated as the "main" branch's list.
+      # The "keep" label is a standalone overlay, not a branch: any
+      # version carrying it is protected outright, everywhere. Apply it
+      # without a recipe change with:
       #   anaconda copy <org>/<pkg>/<version> --from-label main --to-label keep
       # (the org-wide `anaconda label` command has no per-version scoping;
       # `copy` with a 3-part spec -- no filename -- copies every file of
@@ -314,30 +319,27 @@ jobs:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
           TRIM_KEEP: "2"
         run: |
+          pip install --quiet pyyaml
           python3 <<'PYEOF' > trim_plan.txt
           import json, os, re, urllib.request
+          import yaml
 
           def vkey(v):
               return [int(p) if p.isdigit() else -1 for p in re.split(r"[._-]", v)]
 
           def keep_versions_from_recipe():
-              # Regex, not a real YAML parser: meta.yaml is jinja-templated
-              # (yaml.safe_load would need pyyaml, not guaranteed present
-              # on this job's plain python3) and extra.keep_versions is
-              # always a simple flat list of quoted/bare version strings.
+              # {branch_label: {version, ...}}
               try:
                   text = open("recipe/meta.yaml").read()
               except OSError:
-                  return set()
-              m = re.search(r"^[ \t]*keep_versions:[ \t]*\n((?:[ \t]+-[ \t]*.+\n?)+)", text, re.MULTILINE)
-              if not m:
-                  return set()
-              out = set()
-              for line in m.group(1).splitlines():
-                  line = line.strip()
-                  if line.startswith("-"):
-                      out.add(line[1:].strip().strip('"').strip("'"))
-              return out
+                  return {}
+              text = re.sub(r"\{%.*?%\}", "", text, flags=re.DOTALL)
+              text = re.sub(r"\{\{.*?\}\}", "JINJA_VALUE", text)
+              meta = yaml.safe_load(text) or {}
+              raw = (meta.get("extra", {}) or {}).get("keep_versions", {}) or {}
+              if isinstance(raw, list):
+                  return {"main": {str(v) for v in raw}}
+              return {str(b): {str(v) for v in (vs or [])} for b, vs in raw.items()}
 
           org, pkg = "${{ github.repository_owner }}", os.environ["ANACONDA_PACKAGE"]
           keep_n = int(os.environ.get("TRIM_KEEP", "2"))
@@ -347,22 +349,33 @@ jobs:
           for f in data.get("files", []):
               labels_of.setdefault(f.get("version", ""), set()).update(f.get("labels", []))
           versions = [v for v in labels_of if v]
-          # Only numeric versions are releases; branch-named junk versions
-          # (master/latest/beta) trim away like dev builds. A package with
-          # no numeric release yet keeps its newest non-dev version.
-          releases = sorted(
-              (v for v in versions if "dev" not in v and re.match(r"^\d", v)),
-              key=vkey, reverse=True)
-          protect = set(releases[:keep_n])
-          protect |= {v for v in versions if labels_of[v] - {"main", "master"}}
-          protect |= keep_versions_from_recipe() & set(versions)
-          if not releases:
-              fallback = [v for v in versions if "dev" not in v]
-              if fallback:
-                  protect.add(max(fallback, key=vkey))
+          extra_keep = keep_versions_from_recipe()
+
+          # "keep" is a standalone overlay flag, not a release line.
+          protect = {v for v in versions if "keep" in labels_of[v]}
+
+          # Every other label is a branch/release line, trimmed on its own:
+          # only numeric versions count as releases for that branch (junk
+          # like master/latest/beta trims away like a dev build); a branch
+          # with no numeric release yet keeps its newest non-dev version.
+          branch_labels = set()
+          for v in versions:
+              branch_labels |= (labels_of[v] - {"keep"})
+          for branch in branch_labels:
+              branch_versions = [v for v in versions if branch in labels_of[v]]
+              releases = sorted(
+                  (v for v in branch_versions if "dev" not in v and re.match(r"^\d", v)),
+                  key=vkey, reverse=True)
+              protect |= set(releases[:keep_n])
+              protect |= extra_keep.get(branch, set()) & set(branch_versions)
+              if not releases:
+                  fallback = [v for v in branch_versions if "dev" not in v]
+                  if fallback:
+                      protect.add(max(fallback, key=vkey))
+
           for v in sorted(versions, key=vkey, reverse=True):
               action = "KEEP" if v in protect else "DELETE"
-              print(f"{action} {org}/{pkg}/{v}")
+              print(f"{action} {org}/{pkg}/{v}  {sorted(labels_of[v])}")
           PYEOF
           cat trim_plan.txt
           grep "^DELETE " trim_plan.txt | awk '{print $2}' | while read SPEC; do
