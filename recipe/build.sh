@@ -12,6 +12,23 @@ case "$PKG_VERSION" in
     export CPATH="${PREFIX}/include${CPATH:+:$CPATH}"
     export LIBRARY_PATH="${PREFIX}/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 
+    # Upstream's own installer (./Install_omp) does this dir setup and
+    # prebuilds the QCDLoop/TensorReduction static libs before the
+    # top-level make can run -- the top makefile has no rule to create
+    # its own obj_omp/ (or the QCDLoop/TensorReduction ones), it just
+    # assumes Install_omp already ran. Replicated directly here instead
+    # of calling Install_omp itself, since that script also tries to
+    # typeset a LaTeX manual (no latex in this build env, and irrelevant
+    # for a binary package).
+    mkdir -p obj_omp
+    mkdir -p QCDLoop/ff/obj_omp QCDLoop/ql/obj_omp
+    mkdir -p TensorReduction/ov/obj_omp TensorReduction/pv/obj_omp \
+             TensorReduction/recur/smallF/obj_omp TensorReduction/recur/smallG/obj_omp \
+             TensorReduction/recur/smallP/obj_omp TensorReduction/recur/smallY/obj_omp
+
+    (cd QCDLoop && make -f makefile_omp FC="${FC}")
+    (cd TensorReduction && make -f makefile_omp libs FC="${FC}")
+
     NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
     make -j"$NPROC" \
       PDFROUTINES=LHAPDF \
@@ -39,6 +56,15 @@ case "$PKG_VERSION" in
 
     export LD=$FC # prevent using LD in handyG
     ln -s $BUILD_PREFIX/include/* ./src/Inc/
+
+    # The top-level build pulls in qcdloop as a nested ExternalProject,
+    # configured by its own cmake subprocess during `make` (not during
+    # the `cmake ..` below) -- a CMAKE_ARGS passed to the outer cmake
+    # invocation doesn't reach it. qcdloop's own CMakeLists.txt declares
+    # a <3.5 minimum, removed in CMake 4. Exporting this as an env var
+    # (rather than a -D flag) is what actually propagates to that nested
+    # subprocess, since it inherits the environment, not the cache.
+    export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
     mkdir build
     cd build
