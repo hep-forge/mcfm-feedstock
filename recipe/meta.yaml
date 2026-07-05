@@ -12,6 +12,18 @@ package:
   name: {{ environ.get('ANACONDA_PACKAGE', "mcfm")|string|lower }}
   version: {{ environ.get('ANACONDA_VERSION', version)|replace('/', '.')|replace('-', '.') }}
 
+{% if not version.startswith("6.") %}
+build:
+  # 10.x/9.x pull in qcdloop 2.0.9 as a nested CMake ExternalProject,
+  # whose types.h unconditionally `#include <quadmath.h>` (GCC's
+  # quad-precision library) with no fallback -- conda-forge's aarch64
+  # toolchain doesn't ship it (same constraint already hit by, and
+  # accepted for, qcdloop-feedstock's own aarch64 skip). 6.x uses a
+  # different, bundled pre-2016 QCDLoop copy with no such dependency,
+  # and already builds fine on both arches.
+  skip: true  # [aarch64]
+{% endif %}
+
 {% if version.startswith("6.") %}
 source:
   # HEPcodes/MCFM: GitHub mirror of MCFM 6.8. Source files for APPLgrid
