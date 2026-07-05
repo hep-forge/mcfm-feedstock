@@ -1,0 +1,83 @@
+--- a/src/Procdep/realint.f
++++ b/src/Procdep/realint.f
+@@ -36,7 +36,9 @@
+ c--- APPLgrid - enable grids
+       include 'APPLinclude.f'
+       include 'qcdcouple.f'
+-      double precision psCR
++      include 'nlooprun.f'
++      include 'couple.f'
++      double precision psCR, currason2pi, alphas
+ c--- APPLgrid - end
+ 
+ c---- SSbegin                                                                                                                      
+@@ -1199,7 +1201,14 @@
+         if (bin) then
+ c--- APPLgrid - writing out the common block
+            if (creategrid) then
+-              psCR = (1d0/ason2pi)
++           
++              if (dynamicscale) then
++                currason2pi = alphas(dipscale(nd),amz,nlooprun)/twopi
++              else
++                currason2pi = ason2pi
++              endif
++           
++              psCR = (1d0/currason2pi)
+               if ( (case .eq. 'tt_tot')
+      &        .or. (case .eq. 'bb_tot')
+      &        .or. (case .eq. 'cc_tot') 
+@@ -1211,9 +1220,11 @@
+      &        .or. (case .eq. 'tt_hdk')
+      &        .or. (case .eq. 'tthWdk')
+      &        .or. (case .eq. 'qq_ttg') ) then
+-                 psCR = (1d0/ason2pi)**3
+-              elseif ( (case .eq. 'W_cjet')) then
+-                 psCR = (1d0/ason2pi)**2
++                 psCR = (1d0/currason2pi)**3
++              elseif ( (case .eq. 'W_cjet')
++     &        .or. (case .eq. 'Z_1jet')
++     &        .or. (case .eq. 'W_1jet') ) then
++                 psCR = (1d0/currason2pi)**2
+               endif
+               do j=-nflav,nflav
+                  do k=-nflav,nflav
+@@ -1226,7 +1237,11 @@
+ c              weightfactor = weightfactor * eight*pisq/gsq
+               ag_xx1       = xx1
+               ag_xx2       = xx2
+-              ag_scale     = facscale
++              if (dynamicscale) then
++                ag_scale     = dipscale(nd)
++              else
++                ag_scale     = facscale
++              endif
+               refwt        = val/dfloat(itmx)
+               refwt2       = val2/dfloat(itmx)
+ C               print*,"*************************************************"
+@@ -1316,7 +1331,6 @@
+ 
+ 
+ 
+-
+ 
+ 
+ 
+--- a/src/Procdep/virtint.f
++++ b/src/Procdep/virtint.f
+@@ -2431,7 +2431,9 @@
+      &      .or. (case .eq. 'qq_ttg') ) then
+                psCR  = (1d0/ason2pi)**3
+                psCR0 = (1d0/ason2pi)**2
+-            elseif ( (case .eq. 'W_cjet')) then
++            elseif ( (case .eq. 'W_cjet')
++     &      .or. (case .eq. 'Z_1jet')
++     &      .or. (case .eq. 'W_1jet') ) then
+                psCR  = (1d0/ason2pi)**2
+                psCR0 = (1d0/ason2pi)
+             endif
+@@ -2492,4 +2494,3 @@
+       return
+       end
+ 
+-

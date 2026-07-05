@@ -1,7 +1,7 @@
 {% set versions = {
+    "6.8": "226bc3b494675d0fe796119de3555251b7232c6dd4bbb8e7f5a928b157e7fd9d",
     "10.3": "97677cbccb06b2821a5fa1569d1f561b253bd0651a97ab05d13247c708864840",
-    "9.1": "d5d04ec4e8ca74a833e21d705f603686e7d92b575a4fae96bb9ef765b7ea9b52",
-    "6.8": "226bc3b494675d0fe796119de3555251b7232c6dd4bbb8e7f5a928b157e7fd9d"
+    "9.1": "d5d04ec4e8ca74a833e21d705f603686e7d92b575a4fae96bb9ef765b7ea9b52"
 } %}
 
 {% set version = environ.get('COMMIT_VERSION', None) %}
@@ -24,23 +24,15 @@ build:
   skip: true  # [aarch64]
 {% endif %}
 
-{% if version.startswith("6.") %}
-source:
-  # HEPcodes/MCFM: GitHub mirror of MCFM 6.8. Source files for APPLgrid
-  # grid output already exist here (src/User/fill_APPLgrid.f,
-  # gridwrap.f/.cxx) but the makefile's GRID=APPLGRID hook is disabled
-  # and looks stale relative to those files -- not wired up yet. This
-  # version builds plain (no grid output); see build.sh.
-  git_url: "https://github.com/HEPcodes/MCFM"
-  git_rev: "40cee9d7915b0ad57f3476d2a5a5adf18dff267b"
-{% endif %}
-# 10.x (and 9.x) have NO source: url here -- mcfm.fnal.gov's WAF
-# returns 403 to conda-build's own downloader (a python-requests-style
-# user agent) but allows a bare curl with no explicit -A, verified
-# empirically, with stable/deterministic content across repeated
-# fetches. build.sh fetches it directly instead.
+# No source: url/git_url block at all -- mcfm.fnal.gov's WAF returns 403
+# to conda-build's own downloader (a python-requests-style user agent)
+# but allows a bare curl with no explicit -A, verified empirically, with
+# stable/deterministic content across repeated fetches. build.sh fetches
+# it directly instead, for every version including 6.x.
 #  patches: # applied in ./build.sh
-#    - patches/handyG.patch
+#    - patches/handyG.patch                       (10.x/9.x)
+#    - patches/applgrid-realint-virtint.patch      (6.x)
+#    - patches/applgrid-gridwrap-mxpart.patch      (6.x)
 
 requirements:
   build:
@@ -50,9 +42,9 @@ requirements:
 
     - cmake                        # Build system (10.x)
     - make                         # Make utility
-    - automake
-    - autoconf
-    - libtool
+    - automake                     # mcfm-bridge's own build (6.x)
+    - autoconf                     # mcfm-bridge's own build (6.x)
+    - libtool                      # mcfm-bridge's own build (6.x)
     - perl
     {% if not version.startswith("6.") %}
     - mpi
@@ -61,14 +53,26 @@ requirements:
 
   host:
     - lhapdf
-    {% if not version.startswith("6.") %}
+    {% if version.startswith("6.") %}
+    # APPLgrid bridge (mcfm-bridge/mcfm-patch from applgrid.hepforge.org)
+    # links mcfm_interface.cxx/mcfm_grid.cxx into the mcfm binary -- see
+    # build.sh. root634 pin just picks one applgrid build out of its own
+    # root-version matrix; not otherwise significant.
+    - root 6.34.*
+    - applgrid * root634
+    - hoppet ==1.2.0
+    {% else %}
     - mpi
     - mpich
     {% endif %}
 
   run:
     - lhapdf
-    {% if not version.startswith("6.") %}
+    {% if version.startswith("6.") %}
+    - root 6.34.*
+    - applgrid * root634
+    - hoppet ==1.2.0
+    {% else %}
     - mpi
     - mpich
     {% endif %}
@@ -79,7 +83,9 @@ test:
     # 6.x uses a different run convention (process.DAT in the working
     # dir, not input.ini) and no reference output to validate a real
     # physics run against -- just check the binary is present and
-    # linked correctly for now.
+    # linked correctly for now. Grid output itself is opt-in at runtime
+    # (input.DAT's `creategrid` flag, .false. by default) so this does
+    # not exercise the APPLgrid bridge -- see build.sh/README for that.
     - test -x $PREFIX/bin/mcfm
     {% else %}
     - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini"
@@ -96,3 +102,5 @@ about:
 extra:
   recipe-maintainers:
     - meiyasan
+  keep_versions:
+    main: ["6.8"]
