@@ -241,7 +241,7 @@ jobs:
     needs: [env, build]
     steps:
       # needed so the Trim step can read recipe/meta.yaml's
-      # extra.lts (this job has no other checkout).
+      # extra.keep_versions (this job has no other checkout).
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -297,14 +297,11 @@ jobs:
       # trim this package's old versions -- INDEPENDENTLY PER BRANCH/LABEL.
       # One branch = one Anaconda label (main, legacy, eic, cern, old, ...);
       # each keeps its own newest TRIM_KEEP non-dev versions plus its own
-      # extra.lts entries (recipe/meta.yaml, keyed by branch -- "lts" as
-      # in: these versions are Long-Term-Supported in *this channel* and
-      # never auto-trimmed, everything else is meant to disappear. Not to
-      # be confused with any upstream software's own "LTS" release
-      # naming -- e.g. root-feedstock pins old ROOT releases still
-      # required by downstream conda_build_config.yaml `root:` variants):
+      # extra.keep_versions entries (recipe/meta.yaml, keyed by branch --
+      # e.g. root-feedstock pins old ROOT releases still required by
+      # downstream conda_build_config.yaml `root:` variants):
       #   extra:
-      #     lts:
+      #     keep_versions:
       #       main: ["6.34.10", "6.32.16"]
       # A flat list (no branch keys) is still accepted for backward
       # compat and is treated as the "main" branch's list.
@@ -330,8 +327,8 @@ jobs:
           def vkey(v):
               return [int(p) if p.isdigit() else -1 for p in re.split(r"[._-]", v)]
 
-          def lts_from_recipe():
-              # {branch_label: {version, ...}}
+          def recipe_extra(key):
+              # {branch_label: {value, ...}}
               try:
                   text = open("recipe/meta.yaml").read()
               except OSError:
@@ -339,7 +336,7 @@ jobs:
               text = re.sub(r"\{%.*?%\}", "", text, flags=re.DOTALL)
               text = re.sub(r"\{\{.*?\}\}", "JINJA_VALUE", text)
               meta = yaml.safe_load(text) or {}
-              raw = (meta.get("extra", {}) or {}).get("lts", {}) or {}
+              raw = (meta.get("extra", {}) or {}).get(key, {}) or {}
               if isinstance(raw, list):
                   return {"main": {str(v) for v in raw}}
               return {str(b): {str(v) for v in (vs or [])} for b, vs in raw.items()}
@@ -352,25 +349,36 @@ jobs:
           for f in data.get("files", []):
               labels_of.setdefault(f.get("version", ""), set()).update(f.get("labels", []))
           versions = [v for v in labels_of if v]
-          lts_versions = lts_from_recipe()
+          keep_versions = recipe_extra("keep_versions")
+          # Opt-in per-recipe allowlist of non-numeric version strings
+          # (e.g. "beta") that count as real releases for a package
+          # versioned by name instead of semver, rather than being
+          # trimmed as junk/dev output like master/latest/an untagged
+          # dispatch normally would be:
+          #   extra:
+          #     release_tags:
+          #       main: ["beta"]
+          release_tags = recipe_extra("release_tags")
 
           # "keep" is a standalone overlay flag, not a release line.
           protect = {v for v in versions if "keep" in labels_of[v]}
 
           # Every other label is a branch/release line, trimmed on its own:
-          # only numeric versions count as releases for that branch (junk
-          # like master/latest/beta trims away like a dev build); a branch
-          # with no numeric release yet keeps its newest non-dev version.
+          # only numeric versions (or this recipe's own release_tags)
+          # count as releases for that branch -- junk like master/latest
+          # trims away like a dev build); a branch with no numeric release
+          # yet keeps its newest non-dev version.
           branch_labels = set()
           for v in versions:
               branch_labels |= (labels_of[v] - {"keep"})
           for branch in branch_labels:
               branch_versions = [v for v in versions if branch in labels_of[v]]
+              allowed_tags = release_tags.get(branch, set())
               releases = sorted(
-                  (v for v in branch_versions if "dev" not in v and re.match(r"^\d", v)),
+                  (v for v in branch_versions if "dev" not in v and (re.match(r"^\d", v) or v in allowed_tags)),
                   key=vkey, reverse=True)
               protect |= set(releases[:keep_n])
-              protect |= lts_versions.get(branch, set()) & set(branch_versions)
+              protect |= keep_versions.get(branch, set()) & set(branch_versions)
               if not releases:
                   fallback = [v for v in branch_versions if "dev" not in v]
                   if fallback:
