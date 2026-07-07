@@ -102,5 +102,5 @@ about:
 extra:
   recipe-maintainers:
     - meiyasan
-  keep_versions:
+  lts:
     main: ["6.8"]
