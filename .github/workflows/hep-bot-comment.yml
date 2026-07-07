@@ -1,0 +1,122 @@
+name: hep-bot issue comment
+
+# Lets a repo collaborator comment "@hep-bot rerun <version>" on an issue to
+# re-trigger this feedstock's build at an existing tag (both amd64+arm64
+# always run together -- see scripts/templates/autoupload.yml, there's no
+# per-arch dispatch input today). From the hep-forge/.github meta repo,
+# where there's no single "this feedstock" to target, specify the package
+# explicitly: "@hep-bot rerun <package> <version>". That explicit two-arg
+# form also works in an individual feedstock repo (overrides the implicit
+# self-target). Any trailing text (e.g. "for arm and amd") is accepted but
+# ignored, since both architectures always rebuild together. Examples:
+#
+#   @hep-bot rerun 2.2.1                    (in xfitter-dev-feedstock's own issues)
+#   @hep-bot rerun xfitter-dev 2.2.1        (from hep-forge/.github, or any repo)
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  comment:
+    if: >
+      !github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@hep-bot')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Parse command and dispatch rebuild
+        env:
+          GH_TOKEN: ${{ secrets.HEP_BOT_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re, subprocess, sys
+
+          body = os.environ["COMMENT_BODY"]
+          association = os.environ["AUTHOR_ASSOCIATION"]
+          issue = os.environ["ISSUE_NUMBER"]
+          author = os.environ["COMMENT_AUTHOR"]
+          repo = os.environ["REPO"]
+          repo_name = repo.split("/", 1)[1]
+
+          def reply(msg):
+              subprocess.run(
+                  ["gh", "issue", "comment", issue, "--repo", repo, "--body", msg],
+                  check=False,
+              )
+
+          m = re.search(r'@hep-bot\s+rerun\s+(.+)', body, re.IGNORECASE)
+          if not m:
+              # Some other @hep-bot mention (not a recognized command) -- ignore.
+              sys.exit(0)
+
+          # Drop a trailing "for ..." clause (arch selector -- accepted, ignored:
+          # both architectures always rebuild together in one matrix run).
+          rest = re.split(r'\bfor\b', m.group(1).strip(), maxsplit=1, flags=re.IGNORECASE)[0]
+          tokens = rest.split()
+
+          if len(tokens) >= 2:
+              pkg, version = tokens[0], tokens[1]
+          elif len(tokens) == 1 and repo_name.endswith("-feedstock"):
+              # Self-target: infer the package from the repo this comment lives in.
+              pkg, version = repo_name[: -len("-feedstock")], tokens[0]
+          elif len(tokens) == 1:
+              reply(
+                  f"@{author} this repo has no single feedstock to infer -- specify "
+                  f"one: `@hep-bot rerun <package> <version>`."
+              )
+              sys.exit(0)
+          else:
+              reply(
+                  f"@{author} couldn't parse that -- try `@hep-bot rerun <version>` "
+                  f"(or `@hep-bot rerun <package> <version>`)."
+              )
+              sys.exit(0)
+
+          # Only repo collaborators can trigger builds -- this workflow can
+          # dispatch CI that pushes to anaconda.org, so it must not be
+          # triggerable by an arbitrary public commenter.
+          if association not in ("OWNER", "MEMBER", "COLLABORATOR"):
+              reply(f"@{author} sorry, only repo collaborators can trigger reruns via @hep-bot.")
+              sys.exit(0)
+
+          feedstock_repo = f"hep-forge/{pkg}-feedstock"
+
+          check = subprocess.run(["gh", "repo", "view", feedstock_repo], capture_output=True, text=True)
+          if check.returncode != 0:
+              reply(
+                  f"@{author} couldn't find `{feedstock_repo}` -- is `{pkg}` the right "
+                  f"package name (bare name, no `-feedstock` suffix)?"
+              )
+              sys.exit(0)
+
+          tags = subprocess.run(
+              ["git", "ls-remote", "--tags", f"https://github.com/{feedstock_repo}.git", version],
+              capture_output=True, text=True,
+          )
+          if not tags.stdout.strip():
+              reply(
+                  f"@{author} tag `{version}` not found on `{feedstock_repo}` -- check the "
+                  f"exact release tag (e.g. `make inspect {pkg}` locally)."
+              )
+              sys.exit(0)
+
+          result = subprocess.run(
+              ["gh", "workflow", "run", "autoupload.yml", "--repo", feedstock_repo,
+               "--ref", version, "-f", "triggered_by=bot"],
+              capture_output=True, text=True,
+          )
+          if result.returncode != 0:
+              reply(f"@{author} failed to trigger the rebuild: {result.stderr.strip()}")
+              sys.exit(0)
+
+          reply(
+              f"@{author} triggered a rebuild of `{pkg}` at `{version}` (amd64+arm64) on "
+              f"[`{feedstock_repo}`](https://github.com/{feedstock_repo}/actions). "
+              f"Track it with `make ci-status {pkg}` or the Actions tab."
+          )
+          PYEOF
