@@ -241,7 +241,7 @@ jobs:
     needs: [env, build]
     steps:
       # needed so the Trim step can read recipe/meta.yaml's
-      # extra.keep_versions (this job has no other checkout).
+      # extra.lts (this job has no other checkout).
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -297,11 +297,11 @@ jobs:
       # trim this package's old versions -- INDEPENDENTLY PER BRANCH/LABEL.
       # One branch = one Anaconda label (main, legacy, eic, cern, old, ...);
       # each keeps its own newest TRIM_KEEP non-dev versions plus its own
-      # extra.keep_versions entries (recipe/meta.yaml, keyed by branch --
-      # e.g. root-feedstock pins old ROOT releases still required by
+      # extra.lts entries (recipe/meta.yaml, keyed by branch -- e.g.
+      # root-feedstock pins old ROOT releases still required by
       # downstream conda_build_config.yaml `root:` variants):
       #   extra:
-      #     keep_versions:
+      #     lts:
       #       main: ["6.34.10", "6.32.16"]
       # A flat list (no branch keys) is still accepted for backward
       # compat and is treated as the "main" branch's list.
@@ -349,7 +349,7 @@ jobs:
           for f in data.get("files", []):
               labels_of.setdefault(f.get("version", ""), set()).update(f.get("labels", []))
           versions = [v for v in labels_of if v]
-          keep_versions = recipe_extra("keep_versions")
+          lts_versions = recipe_extra("lts")
           # Opt-in per-recipe allowlist of non-numeric version strings
           # (e.g. "beta") that count as real releases for a package
           # versioned by name instead of semver, rather than being
@@ -378,7 +378,7 @@ jobs:
                   (v for v in branch_versions if "dev" not in v and (re.match(r"^\d", v) or v in allowed_tags)),
                   key=vkey, reverse=True)
               protect |= set(releases[:keep_n])
-              protect |= keep_versions.get(branch, set()) & set(branch_versions)
+              protect |= lts_versions.get(branch, set()) & set(branch_versions)
               if not releases:
                   fallback = [v for v in branch_versions if "dev" not in v]
                   if fallback:
