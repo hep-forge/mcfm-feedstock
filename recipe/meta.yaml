@@ -38,6 +38,7 @@ requirements:
   build:
     - {{ compiler('gfortran') }}   # GNU Fortran compiler
     - {{ compiler('c') }}          # GNU C compiler
+    - {{ stdlib('c') }}
     - {{ compiler('cxx') }}        # GNU C++ compiler
 
     - cmake                        # Build system (10.x)
