@@ -5,7 +5,7 @@ name: Anaconda Build & Upload
 # each a comma list of build-job matrix ids ("amd64", "arm64",
 # "macos-arm64", ...). Both default to Linux-only ("amd64,arm64") when
 # unset, so setting neither reproduces today's behavior exactly:
-#   ANACONDA_COMPILE  which legs actually build (job-level `if` on `build`)
+#   ANACONDA_COMPILE  which legs actually build (filters build's matrix)
 #   ANACONDA_PUBLISH  which of the built legs get uploaded to anaconda.org
 #                     (a leg can compile without publishing, e.g. while
 #                     a new platform is still being proven out)
@@ -41,6 +41,7 @@ jobs:
       ANACONDA_LABEL: ${{ steps.anaconda.outputs.ANACONDA_LABEL }}
       ANACONDA_VERSION: ${{ steps.anaconda.outputs.ANACONDA_VERSION }}
       ANACONDA_PACKAGE: ${{ steps.anaconda.outputs.ANACONDA_PACKAGE }}
+      MATRIX_INCLUDE: ${{ steps.platforms.outputs.MATRIX_INCLUDE }}
 
     steps:
       # GitHub's API has no field distinguishing a human's workflow_dispatch
@@ -103,6 +104,29 @@ jobs:
           echo "ANACONDA_VERSION=$ANACONDA_VERSION" >> $GITHUB_ENV
           echo "ANACONDA_VERSION=$ANACONDA_VERSION" >> $GITHUB_OUTPUT
 
+      # Filtering happens here, not via a job-level `if` on `build`,
+      # because the `matrix` context does not exist yet at job-level `if`
+      # evaluation time (GitHub rejects it: "Unrecognized named-value:
+      # 'matrix'") -- the matrix has to be filtered *before* it's built,
+      # by feeding `build`'s strategy.matrix.include from this job's
+      # output via fromJSON().
+      - id: platforms
+        name: Compute Build Matrix (ANACONDA_COMPILE)
+        env:
+          ANACONDA_COMPILE: ${{ vars.ANACONDA_COMPILE }}
+        run: |
+          ALL_PLATFORMS='[
+            {"id":"amd64","runs-on":"ubuntu-24.04","os":"linux"},
+            {"id":"arm64","runs-on":"ubuntu-24.04-arm","os":"linux"},
+            {"id":"macos-arm64","runs-on":"macos-14","os":"macos"}
+          ]'
+          ALLOWED_JSON=$(echo "${ANACONDA_COMPILE:-amd64,arm64}" \
+            | tr ',' '\n' | sed '/^$/d;s/^ *//;s/ *$//' | jq -R . | jq -s .)
+          INCLUDE=$(echo "$ALL_PLATFORMS" \
+            | jq -c --argjson allowed "$ALLOWED_JSON" '[.[] | select(.id as $i | $allowed | index($i))]')
+          echo "Enabled legs: $INCLUDE"
+          echo "MATRIX_INCLUDE=$INCLUDE" >> "$GITHUB_OUTPUT"
+
       - name: Print GitHub Context as JSON
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
@@ -147,20 +171,10 @@ jobs:
   # behavior for feedstocks that haven't opted in.
   build:
     needs: env
-    if: needs.env.result == 'success' && contains(format(',{0},', vars.ANACONDA_COMPILE != '' && vars.ANACONDA_COMPILE || 'amd64,arm64'), format(',{0},', matrix.id))
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - id: amd64
-            runs-on: ubuntu-24.04
-            os: linux
-          - id: arm64
-            runs-on: ubuntu-24.04-arm
-            os: linux
-          - id: macos-arm64
-            runs-on: macos-14
-            os: macos
+        include: ${{ fromJSON(needs.env.outputs.MATRIX_INCLUDE) }}
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Checkout Code
