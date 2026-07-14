@@ -3,17 +3,32 @@ name: Anaconda Build & Upload
 # Platform matrix is controlled by two Actions variables (Settings ->
 # Secrets and variables -> Actions -> Variables, repo or org level),
 # each a comma list of build-job matrix ids ("amd64", "arm64",
-# "macos-arm64", ...). Both default to Linux-only ("amd64,arm64") when
-# unset, so setting neither reproduces today's behavior exactly:
+# "macos-arm64", ...):
 #   ANACONDA_COMPILE  which legs actually build (filters build's matrix)
+#                     default (unset): "amd64,arm64,macos-arm64" -- every
+#                     tag build always attempts macOS too.
 #   ANACONDA_PUBLISH  which of the built legs get uploaded to anaconda.org
-#                     (a leg can compile without publishing, e.g. while
-#                     a new platform is still being proven out)
+#                     default (unset): "amd64,arm64" -- macOS builds are
+#                     never auto-published; a leg can compile without
+#                     publishing while a new platform is still unproven.
+# Because ANACONDA_PUBLISH stays Linux-only by default, setting neither
+# variable already gives "compile everything, publish Linux only" --
+# these two variables exist for further overriding either knob per repo
+# once needed (e.g. muting macOS compile entirely for a repo whose build
+# is currently broken there, or opting a proven macOS build into
+# publishing). See hep-forge-known-issues memory / README for the
+# current state of which packages actually build clean on macOS --
+# expect red macos-arm64 legs on most downstream packages until enough
+# of the DAG is rebuilt+published for that platform (conda's solver
+# silently substitutes a same-named conda-forge package instead of
+# failing loudly whenever hep-forge has no macOS build for a dependency,
+# which can produce confusing build errors unrelated to the package's
+# own code -- verify against the dependency's actual origin channel in
+# the job log before treating a macOS failure as a real bug).
 # For a one-off compile test without touching either variable (e.g. no
 # token with Actions-variables write access, or just testing a single
 # repo), dispatch manually with -f test_macos=true: adds macos-arm64 to
-# that single run's compile set only, nothing persists. ANACONDA_PUBLISH
-# still governs uploads, so it never publishes unless already opted in.
+# that single run's compile set only, nothing persists.
 
 on:
   push:
@@ -130,7 +145,7 @@ jobs:
             {"id":"arm64","runs-on":"ubuntu-24.04-arm","os":"linux"},
             {"id":"macos-arm64","runs-on":"macos-14","os":"macos"}
           ]'
-          ALLOWED="${ANACONDA_COMPILE:-amd64,arm64}"
+          ALLOWED="${ANACONDA_COMPILE:-amd64,arm64,macos-arm64}"
           # One-off addition for this run only -- see the workflow_dispatch
           # inputs.test_macos description above.
           [ "${TEST_MACOS:-false}" = "true" ] && ALLOWED="$ALLOWED,macos-arm64"
@@ -179,10 +194,10 @@ jobs:
   # Which legs actually run is controlled by the repo/org Actions
   # variable ANACONDA_COMPILE: a comma list of matrix ids (e.g.
   # "amd64,arm64" or "amd64,arm64,macos-arm64"). Unset/empty defaults to
-  # "amd64,arm64" -- Linux only. New platforms (macos-arm64 now, win_64
-  # later) are added to the `include` list below but stay opt-in via the
-  # variable until they're proven, so adding a leg here never changes
-  # behavior for feedstocks that haven't opted in.
+  # all three -- macOS always attempts to compile, but ANACONDA_PUBLISH
+  # (default Linux-only) keeps it from auto-publishing. Set
+  # ANACONDA_COMPILE=amd64,arm64 on a specific repo to mute a macOS leg
+  # that's currently broken there instead of leaving it permanently red.
   build:
     needs: env
     strategy:
