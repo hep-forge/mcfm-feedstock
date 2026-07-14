@@ -1,5 +1,15 @@
 name: Anaconda Build & Upload
 
+# Platform matrix is controlled by two Actions variables (Settings ->
+# Secrets and variables -> Actions -> Variables, repo or org level),
+# each a comma list of build-job matrix ids ("amd64", "arm64",
+# "macos-arm64", ...). Both default to Linux-only ("amd64,arm64") when
+# unset, so setting neither reproduces today's behavior exactly:
+#   ANACONDA_COMPILE  which legs actually build (job-level `if` on `build`)
+#   ANACONDA_PUBLISH  which of the built legs get uploaded to anaconda.org
+#                     (a leg can compile without publishing, e.g. while
+#                     a new platform is still being proven out)
+
 on:
   push:
     tags:
@@ -124,10 +134,20 @@ jobs:
 
           echo "🎉 **The environment is successfully configured and all requirements are met.**" >> $GITHUB_STEP_SUMMARY
 
-  # Single matrix job -> shows as 2 parallel branches (amd64 / arm64)
-  # in the Actions run graph instead of 2 separate workflow files.
+  # Single matrix job -> shows as parallel branches (amd64 / arm64 /
+  # macos-arm64 / ...) in the Actions run graph instead of separate
+  # workflow files.
+  #
+  # Which legs actually run is controlled by the repo/org Actions
+  # variable ANACONDA_COMPILE: a comma list of matrix ids (e.g.
+  # "amd64,arm64" or "amd64,arm64,macos-arm64"). Unset/empty defaults to
+  # "amd64,arm64" -- Linux only. New platforms (macos-arm64 now, win_64
+  # later) are added to the `include` list below but stay opt-in via the
+  # variable until they're proven, so adding a leg here never changes
+  # behavior for feedstocks that haven't opted in.
   build:
     needs: env
+    if: needs.env.result == 'success' && contains(format(',{0},', vars.ANACONDA_COMPILE != '' && vars.ANACONDA_COMPILE || 'amd64,arm64'), format(',{0},', matrix.id))
     strategy:
       fail-fast: false
       matrix:
@@ -138,6 +158,9 @@ jobs:
           - id: arm64
             runs-on: ubuntu-24.04-arm
             os: linux
+          - id: macos-arm64
+            runs-on: macos-14
+            os: macos
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Checkout Code
@@ -153,6 +176,16 @@ jobs:
         if: matrix.id == 'arm64'
         run: |
           wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh -O $HOME/miniforge.sh
+          bash $HOME/miniforge.sh -b -p $HOME/miniconda
+          echo "$HOME/miniconda/bin" >> $GITHUB_PATH
+          source $HOME/miniconda/etc/profile.d/conda.sh
+          conda init bash
+          conda update -n base -c defaults conda
+
+      - name: Install Miniforge (macOS ARM64)
+        if: matrix.id == 'macos-arm64'
+        run: |
+          curl -L https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh -o $HOME/miniforge.sh
           bash $HOME/miniforge.sh -b -p $HOME/miniconda
           echo "$HOME/miniconda/bin" >> $GITHUB_PATH
           source $HOME/miniconda/etc/profile.d/conda.sh
@@ -268,28 +301,42 @@ jobs:
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
           ANACONDA_LABEL: ${{ needs.env.outputs.ANACONDA_LABEL }}
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+          ANACONDA_PUBLISH: ${{ vars.ANACONDA_PUBLISH }}
         run: |
           [ -z "$ANACONDA_VERSION" ] && exit 1
           case "$ANACONDA_VERSION" in
             *dev*|0.0.0*) echo "Refusing to upload dev build ($ANACONDA_VERSION)"; exit 0 ;;
           esac
+          # Which built legs are allowed to publish -- a comma list of
+          # matrix ids, same vocabulary as ANACONDA_COMPILE above but a
+          # separate knob: a leg can be compiled without being published
+          # (e.g. macos-arm64 once it's opted into ANACONDA_COMPILE but
+          # not yet trusted enough to ship). Defaults to Linux only.
+          PUBLISH_LEGS=",${ANACONDA_PUBLISH:-amd64,arm64},"
           # Dedupe by subdir/filename: noarch packages are built
-          # identically by both legs and must be uploaded once.
+          # identically by every leg and must be uploaded once.
           declare -A SEEN
           UPLOADED=0
           for CONDA in $(find pkgs-all -name "*.conda" | sort); do
+            # Path shape: pkgs-all/conda-packages-<leg>/<subdir>/<file>.conda
+            LEG="$(basename "$(dirname "$(dirname "$CONDA")")")"
+            LEG="${LEG#conda-packages-}"
+            case "$PUBLISH_LEGS" in
+              *",$LEG,"*) ;;
+              *) echo "Skipping $CONDA (leg '$LEG' not in ANACONDA_PUBLISH=${ANACONDA_PUBLISH:-amd64,arm64})"; continue ;;
+            esac
             KEY="$(basename "$(dirname "$CONDA")")/$(basename "$CONDA")"
             [ -n "${SEEN[$KEY]:-}" ] && { echo "Skipping duplicate $KEY"; continue; }
             SEEN[$KEY]=1
             /usr/share/miniconda/bin/anaconda -t $ANACONDA_API_TOKEN upload --force "$CONDA" --label "$ANACONDA_LABEL"
             UPLOADED=$((UPLOADED + 1))
           done
-          # Both build legs failing leaves download-artifact (continue-on-error)
-          # with nothing, so this loop silently iterates zero times -- without
-          # this check the step (and the whole publish job) reports a
-          # misleading "success" despite publishing nothing.
+          # Every enabled leg failing (or none being publish-eligible)
+          # leaves nothing to upload -- without this check the step (and
+          # the whole publish job) reports a misleading "success" despite
+          # publishing nothing.
           if [ "$UPLOADED" -eq 0 ]; then
-            echo "::error::No .conda packages found to upload -- both build legs must have failed."
+            echo "::error::No .conda packages found to upload -- check ANACONDA_COMPILE/ANACONDA_PUBLISH and that at least one enabled leg built successfully."
             exit 1
           fi
 
@@ -406,4 +453,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "## 🎉 Congratulations!" >> $GITHUB_STEP_SUMMARY
-          echo "Package \`${ANACONDA_PACKAGE}@${ANACONDA_VERSION}\` just got successfully uploaded with \"$ANACONDA_LABEL\" label (amd64 + arm64)!" >> $GITHUB_STEP_SUMMARY
+          echo "Package \`${ANACONDA_PACKAGE}@${ANACONDA_VERSION}\` just got successfully uploaded with \"$ANACONDA_LABEL\" label!" >> $GITHUB_STEP_SUMMARY
