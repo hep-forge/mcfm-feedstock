@@ -9,6 +9,11 @@ name: Anaconda Build & Upload
 #   ANACONDA_PUBLISH  which of the built legs get uploaded to anaconda.org
 #                     (a leg can compile without publishing, e.g. while
 #                     a new platform is still being proven out)
+# For a one-off compile test without touching either variable (e.g. no
+# token with Actions-variables write access, or just testing a single
+# repo), dispatch manually with -f test_macos=true: adds macos-arm64 to
+# that single run's compile set only, nothing persists. ANACONDA_PUBLISH
+# still governs uploads, so it never publishes unless already opted in.
 
 on:
   push:
@@ -22,6 +27,10 @@ on:
         type: choice
         options: [manual, bot]
         default: manual
+      test_macos:
+        description: "Also compile macos-arm64 for this run only (never published unless ANACONDA_PUBLISH already opts it in)"
+        type: boolean
+        default: false
 
 jobs:
   env:
@@ -114,13 +123,18 @@ jobs:
         name: Compute Build Matrix (ANACONDA_COMPILE)
         env:
           ANACONDA_COMPILE: ${{ vars.ANACONDA_COMPILE }}
+          TEST_MACOS: ${{ inputs.test_macos }}
         run: |
           ALL_PLATFORMS='[
             {"id":"amd64","runs-on":"ubuntu-24.04","os":"linux"},
             {"id":"arm64","runs-on":"ubuntu-24.04-arm","os":"linux"},
             {"id":"macos-arm64","runs-on":"macos-14","os":"macos"}
           ]'
-          ALLOWED_JSON=$(echo "${ANACONDA_COMPILE:-amd64,arm64}" \
+          ALLOWED="${ANACONDA_COMPILE:-amd64,arm64}"
+          # One-off addition for this run only -- see the workflow_dispatch
+          # inputs.test_macos description above.
+          [ "${TEST_MACOS:-false}" = "true" ] && ALLOWED="$ALLOWED,macos-arm64"
+          ALLOWED_JSON=$(echo "$ALLOWED" \
             | tr ',' '\n' | sed '/^$/d;s/^ *//;s/ *$//' | jq -R . | jq -s .)
           INCLUDE=$(echo "$ALL_PLATFORMS" \
             | jq -c --argjson allowed "$ALLOWED_JSON" '[.[] | select(.id as $i | $allowed | index($i))]')
