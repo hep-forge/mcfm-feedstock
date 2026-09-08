@@ -16,3 +16,25 @@ c_compiler:
 cxx_compiler:
   - gxx
 
+# ---- Compiler floor (ABI)
+# Pin the compiler major instead of inheriting conda-build's "newest
+# available". Unpinned, each rebuild silently takes whatever conda-forge
+# shipped most recently -- that is how minio-cpp moved from GCC 15 to 16
+# between two rebuilds and stopped compiling, GCC 16 defaulting to C++20
+# where a defaulted constructor stops a struct being an aggregate.
+# 14 is the oldest major still current for both linux-64 and
+# linux-aarch64; binaries built against libstdcxx 14 keep running on
+# newer runtimes, while the reverse fails on missing GLIBCXX symbols.
+# A floor, not a ceiling: raise it per-package for sources that really
+# need a newer toolchain.
+# NB this pins the *ABI*. It only fixes the C++ *dialect* as a side
+# effect (14 defaults to gnu++17); source that requires a particular
+# standard should set CMAKE_CXX_STANDARD explicitly as well.
+c_compiler_version:    # [linux]
+  - 14
+cxx_compiler_version:  # [linux]
+  - 14
+libgcc_version:        # [linux]
+  - 14.*
+libstdcxx_version:     # [linux]
+  - 14.*
