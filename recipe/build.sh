@@ -153,10 +153,10 @@ case "$PKG_VERSION" in
                 < "${RECIPE_DIR}/patches/aarch64-qcdloop-guards.patch" )
         done
 
-        # CMakeLists: create lib/handyG/build (handyG writes objects there but
-        # neither ships nor creates it), make -lquadmath conditional on x86
-        # (nothing references its symbols under the shim), and pass the outer
-        # C/CXX flags explicitly into the qcdloop ExternalProject.
+        # CMakeLists: make -lquadmath conditional on x86 (nothing references
+        # its symbols under the shim, so the link just fails looking for a
+        # library it does not need), and pass the outer C/CXX flags explicitly
+        # into the qcdloop ExternalProject.
         patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/aarch64-cmake.patch"
     fi
 
