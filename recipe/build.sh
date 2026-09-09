@@ -72,6 +72,23 @@ case "$PKG_VERSION" in
     mkdir -p mcfm-bridge
     tar xzf mcfm-bridge.tgz -C mcfm-bridge --strip-components=1
     rm mcfm-bridge.tgz
+
+    # Conf-driven binning/observables for the bridge. Stock mcfm-bridge only
+    # knows a hard-coded `appl_e615` path: one process, 12 fixed x_F bins. These
+    # add an `appl_conf=<file>` path so ONE binary can produce grids for any
+    # dataset -- observable, bin edges, Q2/pT window, nproc, sqrts, x/Q2 grid
+    # nodes and interpolation orders all read from a small text file.
+    #
+    # Written additively: the legacy `appl_e615` path is untouched, and the two
+    # were verified to give an identical integral (8377.7387 fb, same seed).
+    # Every conf key defaults to the previous behaviour, so a config omitting
+    # them all reproduces stock output exactly.
+    #
+    # Diffed against pristine mcfm-bridge-0.0.35; verified to apply to 0.0.53
+    # with `patch -p1 --fuzz=0` (exit 0, no offsets).
+    patch -p1 -d mcfm-bridge < "${RECIPE_DIR}/patches/applgrid-bridge-conf-driven.patch"
+    patch -p1 -d mcfm-bridge < "${RECIPE_DIR}/patches/applgrid-bridge-mcfm-grid.patch"
+
     (
       cd mcfm-bridge
       CC="${CC}" CXX="${CXX}" ./configure --prefix="${SRC_DIR}/mcfm-bridge-install"

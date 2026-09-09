@@ -1,0 +1,49 @@
+--- a/src/mcfm_grid.cxx	2014-10-05 20:45:57
++++ b/src/mcfm_grid.cxx	2026-08-27 00:27:23
+@@ -144,7 +144,7 @@
+ 	    if ( _born_!=0 || _virt_!=0 || _vir1_!=0 || _vir2_!=0 )
+ 	      {
+ 		std::cout<<"( "<<iflav<<" , "<<jflav<<" ) Weights :  born = "<<_born_
+-			 << " _v_ = "<<_virt_<<" _v1_ = "<<_vir1_<<" _v2_ "<<_vir2_ 
++			 << " _v_ = "<<_virt_<<" _v1_ = "<<_vir1_<<" _v2_ "<<_vir2_
+ 			 <<" \n "
+ 			 <<std::endl;
+ 	      }
+@@ -219,8 +219,15 @@
+   iProcess = -1;
+   factor   =  0.;
+   
+-  if ( getGenpdf().find("basic.config") != std::string::npos ) { 
+-    
++  // basic.config and photonLO.config/photonNLO.config (prompt photon,
++  // nproc 280-286) share the same generic "index count (j,k)..." schema, so
++  // both route through lumi_pdf's own file-driven lookup below. Without this,
++  // photonLO/NLO.config fall through to the nproc-specific branches further
++  // down, none of which have a case for 280-286 -- iProcess is never set and
++  // the fill is silently dropped (confirmed: produces an empty/0kB grid).
++  if ( getGenpdf().find("basic.config")   != std::string::npos ||
++       getGenpdf().find("photonLO.config") != std::string::npos ) {
++
+     lumi_pdf* pdf = dynamic_cast<lumi_pdf*>(genpdf(iorder));
+     
+     if ( pdf==0 ) { 
+@@ -232,9 +239,16 @@
+     //    std::cout << "iorder " << iorder << "\tpdf " << pdf << " " << pdf->name() << "  " << pdf->Nproc() << std::endl; 
+ 
+     iProcess = pdf->decideSubProcess( iflav1, iflav2 );
+-    if ( iProcess != -1 ) { 
+-      factor = (*pdf)[iProcess].size(); 
+-      if ( factor>0 ) factor = 1.0/factor; // hmmm
++    if ( iProcess != -1 ) {
++      // Reverted: factor=1.0 (no averaging) made the photon overshoot WORSE
++      // by ~size(), confirming 1/size() is directionally correct here too --
++      // but it is NOT sufficient on its own (still off by ~1e3-1e4 even with
++      // this applied). A separate, larger, unidentified normalization issue
++      // remains in the photon weight path -- see mcfm_interface.cxx getObservable/
++      // collectWeight and whether gridweight_.weightb carries an implicit
++      // flavour-duplication or missing coupling factor for nproc 280-286.
++      factor = (*pdf)[iProcess].size();
++      if ( factor>0 ) factor = 1.0/factor;
+     }
+ 
+     //    std::cout << "iorder " << iorder << "\tiproc " << iProcess << "\tfactor " << factor << std::endl; 
