@@ -121,6 +121,45 @@ case "$PKG_VERSION" in
     export LD=$FC # prevent using LD in handyG
     ln -s $BUILD_PREFIX/include/* ./src/Inc/
 
+    # handyG's configure emits link rules for auxiliary binaries (geval,
+    # handyG, test) that fail in this toolchain. It ALSO makes `install`
+    # depend on geval and copy it, so disabling only the link rules leaves
+    # install failing with `cp: cannot stat 'geval'`. This patch covers both;
+    # the library is all MCFM needs. (9.1 ships no lib/handyG, so this is
+    # 10.x-only.)
+    patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/handyG.patch"
+
+    if [ "$(uname -m)" != "x86_64" ]; then
+        # ---- aarch64 enablement -------------------------------------------
+        # GCC builds libquadmath only where __float128 is a distinct type,
+        # i.e. x86, whose long double is the 80-bit x87 format. On aarch64
+        # `long double` IS IEEE 754 binary128 -- the identical format -- so
+        # the quad arithmetic is already in libm under the long double names
+        # and only GCC's `*q` spelling is missing. A header-only naming shim
+        # supplies it; precision is unchanged.
+        mkdir -p "${SRC_DIR}/quadmath-shim"
+        cp "${RECIPE_DIR}/quadmath-shim.h" "${SRC_DIR}/quadmath-shim/quadmath.h"
+        export CXXFLAGS="${CXXFLAGS:-} -I${SRC_DIR}/quadmath-shim"
+        export CFLAGS="${CFLAGS:-} -I${SRC_DIR}/quadmath-shim"
+
+        # Because __float128 becomes an ALIAS for long double rather than a
+        # distinct type, the two declarations qcdloop makes on its `qdouble`
+        # (a std::ostream operator<< and a std::hash specialisation) collide
+        # with the existing long double ones. Guard exactly those. 10.3 ships
+        # TWO bundled copies and both hard-include <quadmath.h>.
+        for q in lib/qcdloop-2.0.5 lib/qcdloop-2.0.9; do
+            [ -d "$q" ] || continue
+            ( cd "$q" && patch -p1 --fuzz=0 \
+                < "${RECIPE_DIR}/patches/aarch64-qcdloop-guards.patch" )
+        done
+
+        # CMakeLists: create lib/handyG/build (handyG writes objects there but
+        # neither ships nor creates it), make -lquadmath conditional on x86
+        # (nothing references its symbols under the shim), and pass the outer
+        # C/CXX flags explicitly into the qcdloop ExternalProject.
+        patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/aarch64-cmake.patch"
+    fi
+
     # The top-level build pulls in qcdloop as a nested ExternalProject,
     # configured by its own cmake subprocess during `make` (not during
     # the `cmake ..` below) -- a CMAKE_ARGS passed to the outer cmake

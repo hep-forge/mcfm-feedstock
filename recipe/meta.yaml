@@ -12,15 +12,11 @@ package:
   name: {{ environ.get('ANACONDA_PACKAGE', "mcfm")|string|lower }}
   version: {{ environ.get('ANACONDA_VERSION', version)|replace('/', '.')|replace('-', '.') }}
 
-{% if not version.startswith("6.") %}
+{% if version.startswith("9.") %}
 build:
-  # 10.x/9.x pull in qcdloop 2.0.9 as a nested CMake ExternalProject,
-  # whose types.h unconditionally `#include <quadmath.h>` (GCC's
-  # quad-precision library) with no fallback -- conda-forge's aarch64
-  # toolchain doesn't ship it (same constraint already hit by, and
-  # accepted for, qcdloop-feedstock's own aarch64 skip). 6.x uses a
-  # different, bundled pre-2016 QCDLoop copy with no such dependency,
-  # and already builds fine on both arches.
+  # 9.1 is makefile-based (not CMake like 10.x) and bundles qcdloop 2.0.5
+  # with no lib/handyG at all, so it shares neither the build system nor the
+  # patches used to enable 10.x on aarch64. Enabling it is separate work.
   skip: true  # [aarch64]
 {% endif %}
 

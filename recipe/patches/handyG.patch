@@ -1,8 +1,6 @@
-diff --git a/lib/handyG/configure b/lib/handyG/configure
-index 087aeb1..e48dbf6 100755
---- a/lib/handyG/configure
-+++ b/lib/handyG/configure
-@@ -890,8 +890,8 @@ build/%.o: src/%.cpp
+--- a/lib/handyG/configure	2023-01-25 18:04:01.000000000 +0000
++++ b/lib/handyG/configure	2026-09-09 08:46:03.639323199 +0000
+@@ -890,8 +890,8 @@
  		@\$(CC) \$(CXXFLAGS) -c \$<  -o \$@
  
  geval: libhandyg.a build/geval.o
@@ -13,7 +11,7 @@ index 087aeb1..e48dbf6 100755
  
  EOF
  
-@@ -906,8 +906,8 @@ build/mathlink.o: build/mathlink.tm.c
+@@ -906,8 +906,8 @@
  		@\$(CC) \$(MCFLAGS) \$(CFLAGS) -o \$@ -c \$<
  
  handyG: build/mathlink.o libhandyg.a
@@ -24,7 +22,7 @@ index 087aeb1..e48dbf6 100755
  
  
  EOF
-@@ -926,8 +926,8 @@ cat  >> makefile <<EOF
+@@ -926,13 +926,12 @@
  build/test.o: checks/test.f90 \$(testdep)
  
  test: \$(objects) \$(testdep) build/test.o
@@ -33,6 +31,11 @@ index 087aeb1..e48dbf6 100755
 +#		@echo "LD \$@"
 +#		@\$(LD) -o \$@ \$^ \$(LFLAGS)
  
- install: libhandyg.a handyg.mod ${CONF_MPREP:+handyG} geval
+-install: libhandyg.a handyg.mod ${CONF_MPREP:+handyG} geval
++install: libhandyg.a handyg.mod
  		mkdir -p \$(PREFIX)
--- 
+ 		mkdir -p \$(PREFIX)/bin
+-		cp geval \$(PREFIX)/bin/geval
+ 		mkdir -p \$(PREFIX)/lib
+ 		cp libhandyg.a \$(PREFIX)/lib/
+ 		mkdir -p \$(PREFIX)/include

@@ -1,0 +1,51 @@
+--- a/src/qcdloop/types.h	2022-05-20 09:58:18.000000000 +0000
++++ b/src/qcdloop/types.h	2026-09-09 05:59:00.857384922 +0000
+@@ -30,7 +30,9 @@
+ namespace std
+ {
+   //! implementation of operator<< for qdouble
++#ifndef QUADMATH_SHIM_FLOAT128_IS_LONG_DOUBLE
+   ostream& operator<<(std::ostream& out, ql::qdouble f);
++#endif
+ 
+   //! implementation of operator<< for qcomplex
+   ostream& operator<<(std::ostream& out, ql::qcomplex f);
+--- a/src/types.cc	2022-05-20 09:58:18.000000000 +0000
++++ b/src/types.cc	2026-09-09 05:59:56.029691794 +0000
+@@ -9,6 +9,10 @@
+ 
+ namespace std
+ {
++  /* Under the aarch64 quadmath shim qdouble IS long double, which libstdc++
++     already streams; only that one overload must be suppressed. qcomplex has
++     no standard overload and is always required. */
++#ifndef QUADMATH_SHIM_FLOAT128_IS_LONG_DOUBLE
+   ostream& operator<<(std::ostream& out, ql::qdouble f)
+   {
+      char buf[200];
+@@ -18,6 +22,7 @@
+      out << buf;
+      return out;
+    }
++#endif
+ 
+   ostream& operator<<(std::ostream& out, ql::qcomplex f)
+   {
+--- a/src/cache.cc	2022-05-20 09:58:18.000000000 +0000
++++ b/src/cache.cc	2026-09-09 05:59:00.857719338 +0000
+@@ -17,6 +17,7 @@
+     seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+   }
+ 
++#ifndef QUADMATH_SHIM_FLOAT128_IS_LONG_DOUBLE
+   template <>
+   struct hash<ql::qdouble> : public __hash_base<size_t, ql::qdouble>
+   {
+@@ -25,6 +26,7 @@
+       return x != 0.0q ? std::_Hash_impl::hash(x) : 0;
+     }
+   };
++#endif
+ 
+   template <> struct hash<ql::complex> : public __hash_base<size_t, ql::complex>
+   {
