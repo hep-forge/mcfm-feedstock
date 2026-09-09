@@ -1,7 +1,21 @@
 #! /usr/bin/bash
 set -e
 
-case "$PKG_VERSION" in
+# A tag may carry an "-applgrid" suffix to request the APPLgrid-enabled
+# variant, e.g. tag 10.3-applgrid. autoupload.yml turns hyphens into dots for
+# the conda version, so PKG_VERSION arrives as "10.3.applgrid": strip that to
+# get the MCFM version actually published upstream, and dispatch/download on
+# MCFM_VER rather than PKG_VERSION. For a plain tag the two are identical, so
+# 6.8 and 10.3 behave exactly as before.
+MCFM_VER="${PKG_VERSION%.applgrid}"
+if [ "$MCFM_VER" != "$PKG_VERSION" ]; then
+    WITH_APPLGRID=ON
+else
+    WITH_APPLGRID=OFF
+fi
+echo "PKG_VERSION=${PKG_VERSION} -> MCFM_VER=${MCFM_VER} with_applgrid=${WITH_APPLGRID}"
+
+case "$MCFM_VER" in
   6.*)
     # mcfm.fnal.gov's WAF blocks conda-build's own downloader (see the
     # `*)` branch below) -- fetch the real upstream tarball directly,
@@ -13,7 +27,7 @@ case "$PKG_VERSION" in
     # It has no OpenMP support, unlike the GitHub mirror used previously;
     # that's deliberate, not a regression -- the mcfm-bridge grid-filling
     # code below has no locking, so OMP + grid output would race.
-    curl -sL "https://mcfm.fnal.gov/downloads/MCFM-${PKG_VERSION}.tar.gz" -o mcfm.tar.gz
+    curl -sL "https://mcfm.fnal.gov/downloads/MCFM-${MCFM_VER}.tar.gz" -o mcfm.tar.gz
     tar xzf mcfm.tar.gz --strip-components=1
     rm mcfm.tar.gz
 
@@ -118,6 +132,20 @@ case "$PKG_VERSION" in
       FC="${FC}" F90="${FC}" \
       LIBFLAGS="-lqcdloop -lff -lov -lpv -lsmallG -lsmallY -lsmallP -lsmallF -lLHAPDF $(mcfmbridge-config --ldflags)"
 
+    # The 6.x path links the bridge unconditionally, so this check applies to
+    # every 6.x tag, not just a -applgrid one. mcfmbridge-config --ldflags
+    # carries a `-u <setup_mcfmbridge>` force-link; if that ever stops taking
+    # effect the build still succeeds and quietly produces a binary with no
+    # APPLgrid in it. Fail instead of shipping that.
+    NSYM=$(nm -C Bin/mcfm 2>/dev/null | grep -c "appl::grid" || true)
+    echo "appl::grid symbols in Bin/mcfm: ${NSYM}"
+    if [ "${NSYM:-0}" -eq 0 ]; then
+        echo "ERROR: 6.x builds link the APPLgrid bridge, but the binary" >&2
+        echo "       contains no appl::grid symbols -- the force-link did not" >&2
+        echo "       take. Refusing to publish a bridge-less mcfm." >&2
+        exit 1
+    fi
+
     mkdir -p "${PREFIX}/bin"
     cp Bin/mcfm "${PREFIX}/bin/mcfm"
     mkdir -p "${PREFIX}/share/mcfm"
@@ -131,7 +159,7 @@ case "$PKG_VERSION" in
     # repeated fetches. No source: url in meta.yaml for this version;
     # fetch it here instead, into what conda-build already set up as
     # the (otherwise-empty) work directory.
-    curl -sL "https://mcfm.fnal.gov/downloads/MCFM-${PKG_VERSION}.tar.gz" -o mcfm.tar.gz
+    curl -sL "https://mcfm.fnal.gov/downloads/MCFM-${MCFM_VER}.tar.gz" -o mcfm.tar.gz
     tar xzf mcfm.tar.gz --strip-components=1
     rm mcfm.tar.gz
 
@@ -206,15 +234,65 @@ case "$PKG_VERSION" in
     # subprocess, since it inherits the environment, not the cache.
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
+    if [ "$WITH_APPLGRID" = "ON" ]; then
+        # Same bridge tarball and the same two conf-driven patches the 6.x
+        # branch uses, plus the 10.x-specific one. Verified: all three apply to
+        # 0.0.53 with --fuzz=0, and MCFM 10.3 linked against the result gives
+        # the same grid as the 0.0.35-based build used for validation.
+        curl -sL "https://applgrid.hepforge.org/downloads/?f=mcfm-bridge-0.0.53.tgz" -o mcfm-bridge.tgz
+        mkdir -p mcfm-bridge
+        tar xzf mcfm-bridge.tgz -C mcfm-bridge --strip-components=1
+        rm mcfm-bridge.tgz
+
+        patch -p1 -d mcfm-bridge --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-bridge-conf-driven.patch"
+        patch -p1 -d mcfm-bridge --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-bridge-mcfm-grid.patch"
+        patch -p1 -d mcfm-bridge --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-bridge-mcfm103.patch"
+
+        # Build ONLY the library and the config script, not the default `all`.
+        # mcfm-bridge's src/Makefile.am evaluates
+        #     LHAPDFPATH = $(shell lhapdf-config --pdfsets-path)
+        # and modern LHAPDF renamed that option to --datadir, so a plain
+        # `make` dies with "Error: Unknown option '--pdfsets-path'" AFTER
+        # libmcfmbridge.a has already been archived. These four targets are
+        # everything MCFM needs and never touch that variable.
+        # (The 6.x branch above still does a plain make/make install on the
+        # same Makefile.am -- latent breakage there whenever the build image's
+        # LHAPDF is new enough.)
+        (
+          cd mcfm-bridge
+          CC="${CC}" CXX="${CXX}" ./configure --prefix="${SRC_DIR}/mcfm-bridge-install"
+          make -C src libmcfmbridge.a CXX="${CXX}"
+          make -C src install-libLIBRARIES CXX="${CXX}"
+          make -C bin mcfmbridge-config
+          make -C bin install-binSCRIPTS
+        )
+        export PATH="${SRC_DIR}/mcfm-bridge-install/bin:${PATH}"
+    fi
+
     mkdir build
     cd build
 
     cmake .. -DCMAKE_INSTALL_PREFIX=${PREFIX} -Dwith_library=ON \
             -Duse_internal_lhapdf=OFF -Dlhapdf_include_path=$(lhapdf-config --incdir) \
-            -Duse_mpi=ON -Duse_coarray=OFF
+            -Duse_mpi=ON -Duse_coarray=OFF \
+            -Dwith_applgrid=${WITH_APPLGRID}
 
     make
     make install
+
+    if [ "$WITH_APPLGRID" = "ON" ]; then
+        # A bridge that failed to force-link produces a binary with NO APPLgrid
+        # in it and still exits 0 -- see patches/applgrid-mcfm103.md. Never let
+        # that ship under a name promising APPLgrid support.
+        NSYM=$(nm -C mcfm 2>/dev/null | grep -c "appl::grid" || true)
+        echo "appl::grid symbols in mcfm: ${NSYM}"
+        if [ "${NSYM:-0}" -eq 0 ]; then
+            echo "ERROR: with_applgrid=ON but the binary contains no appl::grid symbols." >&2
+            echo "       The bridge did not link; refusing to publish a package that" >&2
+            echo "       advertises APPLgrid support without it." >&2
+            exit 1
+        fi
+    fi
 
     mkdir -p $PREFIX/bin
     cp mcfm $PREFIX/bin

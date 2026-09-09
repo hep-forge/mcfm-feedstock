@@ -29,12 +29,22 @@ build:
 #    - patches/handyG.patch                       (10.x/9.x)
 #    - patches/applgrid-realint-virtint.patch      (6.x)
 #    - patches/applgrid-gridwrap-mxpart.patch      (6.x)
-#    - patches/applgrid-mcfm103-hooks.patch       (10.x, inert unless with_applgrid=ON)
-#    - patches/applgrid-mcfm103-hplog.patch       (10.x, inert unless with_applgrid=ON)
-#    - patches/applgrid-mcfm103-cmake.patch       (10.x, inert unless with_applgrid=ON)
-#    - patches/applgrid-bridge-mcfm103.patch      (mcfm-bridge 0.0.35, NOT applied here)
-#  see patches/applgrid-mcfm103.md for why 10.x ships the bridge sources but
-#  does not enable them.
+#    - patches/applgrid-mcfm103-hooks.patch       (10.x)
+#    - patches/applgrid-mcfm103-hplog.patch       (10.x)
+#    - patches/applgrid-mcfm103-cmake.patch       (10.x)
+#    - patches/applgrid-bridge-mcfm103.patch      (mcfm-bridge, 10.x-applgrid only)
+#
+# APPLgrid variant: tag <version>-applgrid (e.g. 10.3-applgrid) to build with
+# the bridge enabled. autoupload.yml maps that to PKG_VERSION 10.3.applgrid;
+# build.sh strips the suffix to get the upstream MCFM version, builds
+# mcfm-bridge, passes -Dwith_applgrid=ON and then FAILS the build unless the
+# binary really contains appl::grid symbols. A plain 10.3 tag is unaffected:
+# the same patches are applied but with_applgrid stays OFF, and gridwrap.cxx's
+# no-op stubs keep the default link intact. See patches/applgrid-mcfm103.md.
+#
+# For 6.x the bridge is linked UNCONDITIONALLY, so a 6.8-applgrid tag builds
+# exactly what a 6.8 tag builds -- the suffix is a naming alias there, not a
+# different binary. Both are gated on the same appl::grid symbol check.
 
 requirements:
   build:

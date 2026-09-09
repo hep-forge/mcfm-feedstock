@@ -13,23 +13,33 @@ passes):
 K-factors agree independently (1.283 both sides). Per-bin scatter is MC noise
 with no systematic trend.
 
-## Status in this recipe
+## How to build it
 
-The three MCFM-side patches are applied for 10.x, but **`with_applgrid` is left
-OFF by default and the bridge is not built here.** The patches are inert in that
-state: `with_applgrid` is a CMake `option(... OFF)`, and both the bridge link
-flags and the version script live inside its `if()` block.
+Tag `<version>-applgrid`, e.g. **`10.3-applgrid`**. `autoupload.yml` turns the
+hyphen into a dot, so `PKG_VERSION` arrives as `10.3.applgrid`; `build.sh`
+strips the `.applgrid` suffix to get the upstream MCFM version to download,
+builds mcfm-bridge, passes `-Dwith_applgrid=ON`, and then **fails the build**
+unless the resulting binary actually contains `appl::grid` symbols.
 
-The reason for holding back is a version mismatch that has not been resolved:
+A plain `10.3` tag is unaffected: the same three MCFM patches are applied, but
+`with_applgrid` stays OFF and `gridwrap.cxx`'s no-op stubs keep the default link
+intact (verified -- see "gridwrap.cxx must be unconditional" below).
 
-- `build.sh` fetches **mcfm-bridge 0.0.53** for the 6.x path.
-- `applgrid-bridge-mcfm103.patch` was generated against **0.0.35**, the copy
-  vendored in octofit, and on top of the conf-driven `appl_conf` support from
-  `applgrid-bridge-conf-driven.patch` (branch `mcfm-6.8-conf-driven-bridge`).
+The bridge is mcfm-bridge **0.0.53**, the same tarball the 6.x branch fetches,
+with the same two conf-driven patches plus `applgrid-bridge-mcfm103.patch`. All
+three were verified to apply to 0.0.53 with `--fuzz=0`, and MCFM 10.3 linked
+against that bridge produces the same grid as the 0.0.35-based build used for
+the validation numbers above (17 `appl::grid` symbols either way).
 
-So the bridge-side patch is shipped for reference but has **not** been verified
-against 0.0.53, and no conda build of 10.x with the bridge enabled has been run.
-Turning it on is the remaining work; see "To enable" below.
+**The bridge is built with four explicit make targets, not a plain `make`.**
+`src/Makefile.am` evaluates `LHAPDFPATH = $(shell lhapdf-config --pdfsets-path)`,
+and modern LHAPDF renamed that option to `--datadir`, so `make` dies with
+`Error: Unknown option '--pdfsets-path'` *after* `libmcfmbridge.a` has already
+been archived. `libmcfmbridge.a`, `install-libLIBRARIES`, `mcfmbridge-config`
+and `install-binSCRIPTS` are all MCFM needs and never touch that variable.
+Note the 6.x branch still does a plain `make && make install` on the same
+`Makefile.am` -- latent breakage there whenever the build image's LHAPDF is new
+enough.
 
 ## Patches
 
@@ -38,7 +48,7 @@ Turning it on is the remaining work; see "To enable" below.
 | `applgrid-mcfm103-hooks.patch` | MCFM 10.3 | integrand hooks in lowint/virtint/realint/nplotter/mcfm_exit, plus new `src/Inc/APPLinclude.f` and `src/User/gridwrap.cxx`, and the `/gridnorm/` plumbing in parseinput.f90 / mod_MCFMStorage.f90 |
 | `applgrid-mcfm103-hplog.patch` | MCFM 10.3 | renames `/fillred/` to `/mcfmfillred/` in hplog.f/hplog6.f; adds `hide-hplog.map` |
 | `applgrid-mcfm103-cmake.patch` | MCFM 10.3 | `option(with_applgrid)`, bridge link flags, version script |
-| `applgrid-bridge-mcfm103.patch` | mcfm-bridge **0.0.35** | repoints `grid->run()` at `/gridnorm/`; `__thread` on the commons 10.3 makes threadprivate |
+| `applgrid-bridge-mcfm103.patch` | mcfm-bridge **0.0.53** (on top of the two conf-driven patches) | repoints `grid->run()` at `/gridnorm/`; `__thread` on the commons 10.3 makes threadprivate |
 
 All three MCFM patches were verified to apply to the pristine MCFM-10.3 tarball
 with `--fuzz=0` and to reproduce the exact tree that produced the numbers above.
@@ -57,20 +67,6 @@ N3LO is grouped with `kresummed` in `pdfwrap_lhapdf.f` and requires
 `resummation%makegrid` to tabulate transformed PDF sets. NLO grids plus
 higher-order K-factors is the workable route.
 
-## To enable (remaining work)
-
-1. Decide the bridge version. Either regenerate
-   `applgrid-bridge-mcfm103.patch` against 0.0.53, or vendor 0.0.35 for the
-   10.x path as the 6.x path does for its own copy.
-2. Build the bridge before the `cmake` step and put `mcfmbridge-config` on
-   PATH, as the 6.x branch of `build.sh` already does.
-3. Pass `-Dwith_applgrid=ON`.
-4. Verify the bridge actually linked -- `nm -C mcfm | grep -c "appl::grid"`
-   must be non-zero. **The build succeeds with no APPLgrid in the binary** if
-   the link flags are attached with `target_link_libraries()` instead of
-   `set_property(... LINK_FLAGS)`: CMake mangles `-u setup_mcfmbridge` into
-   `-lsetup_mcfmbridge`, the force-link never forms, and nothing complains.
-
 ## gridwrap.cxx must be unconditional
 
 `src/User/gridwrap.cxx` is compiled for every 10.x build, not only when
@@ -87,7 +83,7 @@ Verified after the fix: with the option OFF, cmake reports the bridge as not
 enabled, the object is still compiled, and it defines all three symbols -- so
 the default 10.x build links exactly as it did before these patches.
 
-## Runtime requirements (for whoever turns this on)
+## Runtime requirements
 
 1. **Two passes.** `book_grid()` branches on whether the grid file exists: pass
    1 creates and fills it, recording the populated phase space; pass 2 reads it
