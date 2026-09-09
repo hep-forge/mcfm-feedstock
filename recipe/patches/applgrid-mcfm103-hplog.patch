@@ -1,0 +1,125 @@
+--- a/lib/SpecialFunctions/hplog.f
++++ b/lib/SpecialFunctions/hplog.f
+@@ -40,8 +40,8 @@
+       real(dp):: Hi1(n1:n2),Hi2(n1:n2,n1:n2),Hi3(n1:n2,n1:n2,n1:n2), 
+      &          Hi4(n1:n2,n1:n2,n1:n2,n1:n2)
+       integer::infilldim,infill(3)
+-      common /fillred/infilldim,infill 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill 
++!$omp threadprivate(/mcfmfillred/)
+       real(dp),parameter::r2   = 1.4142135623730950488_dp
+ c* check on the weight nw 
+       if ( (nw < 1).or.(nw > 4) ) then 
+@@ -274,8 +274,8 @@
+      &          Gi3(-n2:-n1,-n2:-n1,-n2:-n1), 
+      &          Gi4(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1) 
+       integer::infilldim,infill(3)
+-      common /fillred/infilldim,infill 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill 
++!$omp threadprivate(/mcfmfillred/)
+       integer::istorfill(3)
+       integer,parameter::nphase(-1:1)=(/-1,1,-1/) 
+       real(dp),parameter:: pi   = 3.14159265358979324_dp
+@@ -372,8 +372,8 @@
+ c* 
+       integer::i,k1,k2,k3,k4,istorfill(3)
+       integer::infilldim,infill(3)
+-      common /fillred/infilldim,infill 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill 
++!$omp threadprivate(/mcfmfillred/)
+       integer,parameter::nphase(-1:1)=(/-1,1,-1/) 
+ 
+       real(dp),parameter:: pi   = 3.14159265358979324_dp
+@@ -458,8 +458,8 @@
+ c* 
+       integer::nph1,nph2,nph3,nph4
+       integer::infilldim,infill(3)
+-      common /fillred/infilldim,infill 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill 
++!$omp threadprivate(/mcfmfillred/)
+       integer::istorfill(3)
+       integer,parameter::nphase(-1:1)=(/-1,1,-1/) 
+ 
+@@ -557,8 +557,8 @@
+       real(dp):: Hi1(n1:n2),Hi2(n1:n2,n1:n2),Hi3(n1:n2,n1:n2,n1:n2), 
+      &          Hi4(n1:n2,n1:n2,n1:n2,n1:n2) 
+       integer::infilldim,infill(3)
+-      common /fillred/infilldim,infill 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill 
++!$omp threadprivate(/mcfmfillred/)
+       real(dp),parameter::pinv = 0.318309886183790672_dp
+       real(dp),parameter:: pi   = 3.14159265358979324_dp
+ c* combining real and immaginary into the complex value 
+--- a/lib/SpecialFunctions/hplog6.f
++++ b/lib/SpecialFunctions/hplog6.f
+@@ -55,8 +55,8 @@
+      &          Hi4(n1:n2,n1:n2,n1:n2,n1:n2), 
+      &          Hi5(n1:n2,n1:n2,n1:n2,n1:n2,n1:n2),
+      &          Hi6(n1:n2,n1:n2,n1:n2,n1:n2,n1:n2,n1:n2) 
+-      common /fillred/infilldim,infill(3) 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill(3) 
++!$omp threadprivate(/mcfmfillred/)
+       parameter (r2   = 1.4142135623730950488d0) 
+ ** check on the weight nw 
+       if ( (nw.lt.1).or.(nw.gt.6) ) then 
+@@ -349,8 +349,8 @@
+      &          Gi4(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1), 
+      &          Gi5(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1), 
+      &          Gi6(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1) 
+-      common /fillred/infilldim,infill(3) 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill(3) 
++!$omp threadprivate(/mcfmfillred/)
+       dimension istorfill(3)
+       dimension nphase(-1:1) 
+       data nphase/-1,1,-1/ 
+@@ -487,8 +487,8 @@
+      &          Gi4(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1), 
+      &          Gi5(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1), 
+      &          Gi6(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1) 
+-      common /fillred/infilldim,infill(3) 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill(3) 
++!$omp threadprivate(/mcfmfillred/)
+       dimension istorfill(3)
+       dimension nphase(-1:1) 
+       data nphase/-1,1,-1/ 
+@@ -603,8 +603,8 @@
+      &          Gi5(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1), 
+      &          Gi6(-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1,-n2:-n1) 
+ ** 
+-      common /fillred/infilldim,infill(3) 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill(3) 
++!$omp threadprivate(/mcfmfillred/)
+       dimension istorfill(3)
+       dimension nphase(-1:1) 
+       data nphase/-1,1,-1/ 
+@@ -736,8 +736,8 @@
+      &          Hi4(n1:n2,n1:n2,n1:n2,n1:n2), 
+      &          Hi5(n1:n2,n1:n2,n1:n2,n1:n2,n1:n2), 
+      &          Hi6(n1:n2,n1:n2,n1:n2,n1:n2,n1:n2,n1:n2) 
+-      common /fillred/infilldim,infill(3) 
+-!$omp threadprivate(/fillred/)
++      common /mcfmfillred/infilldim,infill(3) 
++!$omp threadprivate(/mcfmfillred/)
+       parameter (pinv = 0.318309886183790672d0) 
+       parameter (pi   = 3.14159265358979324d0) 
+ ** combining real and immaginary into the complex value 
+--- a/hide-hplog.map
++++ b/hide-hplog.map
+@@ -0,0 +1,8 @@
++{
++  local:
++    hplog_;
++    fillred1dhpl_;
++    fillredhpl2_;
++    fillredhpl3_;
++    fillredhpl4_;
++};

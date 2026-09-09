@@ -129,6 +129,26 @@ case "$PKG_VERSION" in
     # 10.x-only.)
     patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/handyG.patch"
 
+    # ---- APPLgrid bridge sources (INERT unless -Dwith_applgrid=ON) ---------
+    # Fixed-order APPLgrid support ported from the 6.8 bridge and validated
+    # against it (LO 1.00138, NLO 1.00195 on E615 slice 0). See
+    # patches/applgrid-mcfm103.md.
+    #
+    # These are applied unconditionally for 10.x but do NOT change the default
+    # build: with_applgrid is a CMake option(... OFF), and both the bridge link
+    # flags and the version script sit inside its if() block. The hplog rename
+    # is self-contained within hplog.f/hplog6.f.
+    #
+    # with_applgrid is NOT switched on here. build.sh fetches mcfm-bridge
+    # 0.0.53 for the 6.x path, while applgrid-bridge-mcfm103.patch was
+    # generated against 0.0.35 (octofit's vendored, conf-driven copy). That
+    # mismatch is unresolved and no conda build of 10.x with the bridge
+    # enabled has been run, so enabling it is left as explicit follow-up work
+    # rather than turned on untested.
+    patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-mcfm103-hooks.patch"
+    patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-mcfm103-hplog.patch"
+    patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-mcfm103-cmake.patch"
+
     if [ "$(uname -m)" != "x86_64" ]; then
         # ---- aarch64 enablement -------------------------------------------
         # GCC builds libquadmath only where __float128 is a distinct type,
