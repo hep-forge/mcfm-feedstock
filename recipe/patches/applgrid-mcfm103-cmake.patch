@@ -1,0 +1,109 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -63,7 +63,7 @@
+     SOURCE_DIR ${CMAKE_BINARY_DIR}/lib/qcdloop-2.0.9
+     BUILD_IN_SOURCE ON
+     PATCH_COMMAND mkdir -p ${CMAKE_BINARY_DIR}/local
+-    CMAKE_ARGS -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DENABLE_FORTRAN_WRAPPER=ON -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/local -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_INSTALL_LIBDIR=lib
++    CMAKE_ARGS -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DENABLE_FORTRAN_WRAPPER=ON -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/local -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS} -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS} -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+     BUILD_COMMAND ${MAKE}
+     INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install
+ )
+@@ -83,12 +83,48 @@
+     PREFIX ${CMAKE_BINARY_DIR}/lib/handyG
+     SOURCE_DIR ${CMAKE_BINARY_DIR}/lib/handyG
+     BUILD_IN_SOURCE ON
+-    PATCH_COMMAND mkdir -p ${CMAKE_BINARY_DIR}/local
++    PATCH_COMMAND mkdir -p ${CMAKE_BINARY_DIR}/local ${CMAKE_BINARY_DIR}/lib/handyG/build
+     CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} FC=${CMAKE_Fortran_COMPILER} CFLAGS=-fPIC CXXFLAGS=-fPIC FFLAGS=-fPIC  ./configure --prefix=${CMAKE_BINARY_DIR}/local --moduledir=${CMAKE_BINARY_DIR}/local/include
+     BUILD_COMMAND ${MAKE}
+     INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install
+ )
+ 
++# libquadmath is x86-only: GCC builds it where __float128 is a distinct type,
++# which it is not on aarch64 (there long double already IS IEEE binary128, so
++# the quad arithmetic lives in libm under the long double names). Linking
++# -lquadmath therefore fails on aarch64 even though nothing needs its symbols.
++if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i686")
++  set(MCFM_QUADMATH quadmath)
++else()
++  set(MCFM_QUADMATH "")
++endif()
++
++# ---- APPLgrid bridge (optional) --------------------------------------------
++# Compiles the C++ hook shim and links mcfm-bridge, as the 6.8 build does.
++# gridwrap.cxx provides C-callable book_grid_/fill_grid_/write_grid_ stubs that
++# dispatch through function pointers the bridge installs at load time.
++# FIXED ORDER ONLY -- resummed contributions are never gridded, because
++# APPLgrid re-convolution assumes linearity in the PDFs and resummation is not.
++option(with_applgrid "Build with the APPLgrid bridge" OFF)
++if(${with_applgrid})
++    find_program(MCFMBRIDGE_CONFIG mcfmbridge-config)
++    if(NOT MCFMBRIDGE_CONFIG)
++        message(FATAL_ERROR "with_applgrid=ON but mcfmbridge-config not found in PATH")
++    endif()
++    execute_process(COMMAND ${MCFMBRIDGE_CONFIG} --ldflags
++                    OUTPUT_VARIABLE MCFMBRIDGE_LDFLAGS
++                    OUTPUT_STRIP_TRAILING_WHITESPACE)
++    # Do NOT separate_arguments() this into a list and hand it to
++    # target_link_libraries: CMake treats each element as a library name, so
++    # `-u setup_mcfmbridge` becomes `-u` followed by `-lsetup_mcfmbridge`, a
++    # library that does not exist. The force-link then never forms, nothing
++    # references the bridge, and the static archive contributes nothing --
++    # the build still succeeds but produces a binary with no APPLgrid in it.
++    # Keep it as ONE string and append it to the link flags instead.
++    add_compile_definitions(WITH_APPLGRID=1)
++    message(STATUS "APPLgrid bridge enabled: ${MCFMBRIDGE_LDFLAGS}")
++endif()
++
+ ## Configuration options
+ 
+ option(use_internal_lhapdf "Use shipped LHAPDF" ON)
+@@ -126,6 +162,26 @@
+ target_include_directories(objlib PRIVATE src/Inc .)
+ target_include_directories(mcfm PRIVATE src/Inc .)
+ 
++# gridwrap.cxx is compiled UNCONDITIONALLY, not only when with_applgrid is ON.
++# It provides null-guarded no-op stubs for book_grid_/fill_grid_/write_grid_,
++# and nplotter.f / mcfm_exit.f call those unconditionally -- the calls are
++# compiled regardless of the runtime `creategrid` test. Gating the file on
++# with_applgrid breaks the DEFAULT build with
++#   mcfm_exit.f: undefined reference to `write_grid_'
++#   nplotter.f:  undefined reference to `fill_grid_'
++# When the bridge is not linked the function pointers stay null and the stubs
++# do nothing, which is exactly what the file was written for.
++target_sources(objlib PRIVATE src/User/gridwrap.cxx)
++
++if(${with_applgrid})
++    set_property(TARGET mcfm APPEND_STRING PROPERTY
++                 LINK_FLAGS " ${MCFMBRIDGE_LDFLAGS} -lstdc++ -Wl,--version-script=${CMAKE_SOURCE_DIR}/hide-hplog.map")
++    if(${with_library})
++        set_property(TARGET libmcfm APPEND_STRING PROPERTY
++                     LINK_FLAGS " ${MCFMBRIDGE_LDFLAGS} -lstdc++ -Wl,--version-script=${CMAKE_SOURCE_DIR}/hide-hplog.map")
++    endif()
++endif()
++
+ ## MCFM as a library
+ 
+ if(${with_library})
+@@ -306,9 +362,9 @@
+ 
+ if(${with_library})
+     if(use_internal_lhapdf)
+-        target_link_libraries(libmcfm qdmod_lib_static qd_lib_static qcdloop_lib_static oneloop handyg_lib_static ${linkvvamp} quadmath stdc++ lhapdf_lib_static)
++        target_link_libraries(libmcfm qdmod_lib_static qd_lib_static qcdloop_lib_static oneloop handyg_lib_static ${linkvvamp} ${MCFM_QUADMATH} stdc++ lhapdf_lib_static)
+     else()
+-        target_link_libraries(libmcfm qdmod_lib_static qd_lib_static qcdloop_lib_static oneloop handyg_lib_static ${linkvvamp} quadmath stdc++ ${lhapdf_lib})
++        target_link_libraries(libmcfm qdmod_lib_static qd_lib_static qcdloop_lib_static oneloop handyg_lib_static ${linkvvamp} ${MCFM_QUADMATH} stdc++ ${lhapdf_lib})
+     endif()
+     if (DEFINED OLDIR)
+       target_link_libraries(oltest libmcfm ${openloops_lib})
+@@ -327,7 +383,7 @@
+     endif()
+ endif()
+ 
+-target_link_libraries(mcfm qdmod_lib_static qd_lib_static qcdloop_lib_static oneloop handyg_lib_static ${linkvvamp} quadmath stdc++)
++target_link_libraries(mcfm qdmod_lib_static qd_lib_static qcdloop_lib_static oneloop handyg_lib_static ${linkvvamp} ${MCFM_QUADMATH} stdc++)
+ 
+ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+ set(CMAKE_INSTALL_RPATH "${CMAKE_BINARY_DIR}/local/lib")

@@ -1,0 +1,982 @@
+--- a/src/Inc/APPLinclude.f
++++ b/src/Inc/APPLinclude.f
+@@ -0,0 +1,53 @@
++      logical creategrid
++      integer nSubProcess
++      common/grid/creategrid,nSubProcess
++
++      double precision weightb( -nf:nf, -nf:nf)
++      double precision weightv( -nf:nf, -nf:nf)
++      double precision weightv1( -nf:nf, -nf:nf)
++      double precision weightv2( -nf:nf, -nf:nf)
++      double precision weightr( 0:maxd , -nf:nf, -nf:nf)
++      double precision weightfactor
++      common/gridweight/
++     .     weightfactor,
++     .     weightb,
++     .     weightv,weightv1,weightv2,
++     .     weightr
++      
++c--- APPLgrid - integration accounting. MCFM 10.3 NEVER assigns itmx or ncall
++c--- (the /bveg1int/ common in vegas_common.f is vestigial in 10.3), so the 6.8
++c--- normalisation "/dfloat(itmx)" divides by ZERO here and every stored weight
++c--- becomes NaN. 10.3 keeps the real counts in MCFMStorage: info%callsPerIt and
++c--- the per-call niter. These are set from integrate() -- as DOUBLES, so there
++c--- is no Fortran-integer-kind vs C-struct-padding ambiguity for the bridge.
++c---   ag_niter  : iterations in the CURRENT integrate() batch
++c---   ag_totcall: production calls accumulated so far (metadata for run())
++c---   ag_fill   : .true. only in production (stage >= 1). Warmup events must
++c---               NOT be filled or they contaminate the grid.
++c--- Deliberately NOT threadprivate: written once per batch on the master
++c--- thread, read-only inside the event loop (same reasoning as /grid/).
++      double precision ag_niter,ag_totcall
++      logical ag_fill
++      common/gridnorm/ag_niter,ag_totcall,ag_fill
++
++      integer contrib,dipole
++      double precision ag_xx1,ag_xx2,ag_x1z,ag_x2z,ag_scale,refwt,refwt2
++      common/gridevent/
++     .     ag_xx1,ag_xx2,ag_x1z,ag_x2z,
++     .     ag_scale,refwt,refwt2,
++     .     contrib,dipole
++      
++
++
++c--- APPLgrid - THREAD SAFETY.
++c--- MCFM 10.3 runs the fixed-order integrands under OpenMP, and 10.3 already
++c--- declares /nflav/ and /qcdcouple/ threadprivate for that reason. These grid
++c--- blocks accumulate PER EVENT, so without the same treatment every thread
++c--- would write the same weightb/gridevent storage and the weights would race.
++c--- NOTE /grid/ is deliberately NOT threadprivate: creategrid is read-only
++c--- configuration, set once on the master thread by parseinput. Making it
++c--- threadprivate would give worker threads an uninitialised (false) copy and
++c--- no grid would ever be filled. Only the per-event accumulators below need
++c--- thread-private storage.
++!$omp threadprivate(/gridweight/)
++!$omp threadprivate(/gridevent/)
+--- a/src/User/gridwrap.cxx
++++ b/src/User/gridwrap.cxx
+@@ -0,0 +1,39 @@
++//
++//   @file    new_gridwrap.cxx         
++//   
++//
++//   @author M.Sutton
++// 
++//   Copyright (C) 2013 M.Sutton (sutt@cern.ch)    
++//
++//   $Id: new_gridwrap.cxx, v0.0   Thu 18 Jul 2013 20:24:29 CEST sutt $
++
++//namespace mcfm_bridge { 
++
++static const int mxpart = 14;    // MCFM 10.3 src/Inc/mxpart.f (6.8 constants.f also has 14).
++                                 // MUST match mcfm_interface.cxx or fill_gridptr is
++                                 // declared with two different types across TUs (ODR/UB).
++
++/// function pointer hooks - set to 0 when no functions defined and applgrid not linked
++void (*book_gridptr)()                            = 0;
++void (*fill_gridptr)(const double evt[][mxpart])  = 0;
++void (*write_gridptr)(double& )                   = 0;
++
++//}
++
++/// mcfm user hooks - do nothing if external function pointers are not assigned
++
++/// book grids
++extern "C" void  book_grid_()  {  if ( book_gridptr ) book_gridptr(); }
++extern "C" void  book_grid__() {  book_grid_(); }
++
++/// fill grids
++extern "C" void  fill_grid_(const double evt[][mxpart])     {   if ( fill_gridptr ) fill_gridptr(evt); }
++extern "C" void  fill_grid__(const double evt[][mxpart])    {   fill_grid_(evt); }
++
++/// write grids
++extern "C" void  write_grid_(double& xstotal)      { if ( write_gridptr ) write_gridptr(xstotal); }
++extern "C" void  write_grid__(double& xstotal)     { write_grid_(xstotal); }
++
++
++
+--- a/src/Procdep/lowint.f
++++ b/src/Procdep/lowint.f
+@@ -37,6 +37,14 @@
+       include 'sprods_com.f'
+       include 'scale.f'
+       include 'facscale.f'
++c--- APPLgrid - weight/event common blocks (fixed-order only; the resummed
++c--- path is deliberately NOT gridded, it is not linear in the PDFs).
++c--- maxd.f must precede APPLinclude.f: weightr is dimensioned (0:maxd,...)
++c--- and without the parameter it becomes an automatic object, which Fortran
++c--- forbids in COMMON. vegas_common.f (for itmx) is already included above.
++      include 'maxd.f'
++      include 'APPLinclude.f'
++c--- APPLgrid - end
+       include 'dynamicscale.f'
+       include 'noglue.f'
+       include 'kprocess.f'
+@@ -858,6 +866,17 @@
+             endif
+       endif
+ 
++c--- APPLgrid - initialize array
++      if (creategrid .and. ag_fill .and. bin) then
++         do j=-nf,nf
++            do k=-nf,nf
++               weightb(j,k) = 0d0
++            enddo
++         enddo
++         weightfactor = 1d0
++      endif
++c--- APPLgrid - end
++
+       do j=-nflav,nflav
+       do k=-nflav,nflav
+ 
+@@ -892,6 +911,11 @@
+       endif
+ 
+       xmsq=xmsq+xmsqjk
++c--- APPLgrid - save the PDF-stripped matrix element for this flavour pair
++      if (creategrid .and. bin .and. (currentPDF == 0)) then
++         weightb(j,k) = weightb(j,k) + msq(j,k)
++      endif
++c--- APPLgrid - end
+       if (kewcorr /= knone) xmsq_noew=xmsq_noew+xmsqjk_noew
+ 
+       enddo
+@@ -901,6 +925,22 @@
+       if (currentPDF == 0) then
+         lowint=flux*pswt*xmsq/BrnRat
+         if (kewcorr /= knone) lowint_noew=flux*pswt*xmsq_noew/BrnRat
++c--- APPLgrid - publish the event: Bjorken x, factorization scale and the
++c--- overall weight, so the C++ side can fill the grid. contrib=100 marks a
++c--- Born (LO) contribution, matching the 6.8 bridge convention.
++        if (creategrid .and. ag_fill .and. bin) then
++           contrib      = 100
++           weightfactor = flux*pswt*wgt/BrnRat/ag_niter
++           ag_xx1       = xx(1)
++           ag_xx2       = xx(2)
++           ag_scale     = facscale
++c--- 6.8 uses val=lowint*wgt, refwt=val/itmx, refwt2=val**2/itmx. Note refwt2
++c--- is val SQUARED over niter, NOT refwt squared -- refwt*refwt would divide
++c--- by niter twice and understate the stored MC error.
++           refwt        = lowint*wgt/ag_niter
++           refwt2       = (lowint*wgt)**2/ag_niter
++        endif
++c--- APPLgrid - end
+       endif
+ 
+ c compute weights for scale variation
+--- a/src/Procdep/virtint.f
++++ b/src/Procdep/virtint.f
+@@ -52,6 +52,15 @@
+       include 'limits.f'
+       include 'heavyflav.f'
+       include 'nflav.f'
++c--- APPLgrid. maxd.f MUST precede APPLinclude.f: weightr is dimensioned
++c--- (0:maxd,...) and without the parameter it becomes an automatic object,
++c--- which Fortran forbids in a COMMON block.
++      include 'maxd.f'
++      include 'APPLinclude.f'
++c--- f_X1overZ/f_X2overZ flag whether the x1/z and x2/z collinear convolution
++c--- terms are kinematically live for this event (set where fdist is called on
++c--- x1onz/x2onz). psCR/psCR0 strip powers of alpha_s from the stored weights.
++      double precision f_X1overZ, f_X2overZ, psCR, psCR0
+       include 'b0.f'
+       include 'masses.f'
+       include 'wts_bypart.f'
+@@ -1289,6 +1298,24 @@
+       !currentPDF = 0
+       currentNd = 0
+ 
++c--- APPLgrid - initialise the per-event weight accumulators. This sits
++c--- BEFORE label 777: 777 is the top of the PDF-set loop, so zeroing inside
++c--- it would discard the weights on the final PDF iteration.
++      if (creategrid .and. ag_fill .and. bin) then
++         do j=-nf,nf
++            do k=-nf,nf
++               weightb(j,k)  = 0d0
++               weightv(j,k)  = 0d0
++               weightv1(j,k) = 0d0
++               weightv2(j,k) = 0d0
++            enddo
++         enddo
++         weightfactor = 1d0
++         f_X1overZ = 0d0
++         f_X2overZ = 0d0
++      endif
++c--- APPLgrid - end
++
+ c--- initialize a PDF set here, if calculating errors
+   777 continue
+       xmsq=0._dp
+@@ -1362,10 +1389,14 @@
+           if (kcase == kWgajja) call photonpdffix(fx2,fxa)
+           if (z > xx(1)) then
+             call fdist(ih1,x1onz,facscale,fx1z,1)
++c--- APPLgrid - this x/z convolution term is live for this event
++            f_X1overZ = 1d0
+             if (kcase == kWgajja) call photonpdffix(fx1z,fxa)
+           endif
+           if (z > xx(2)) then
+             call fdist(ih2,x2onz,facscale,fx2z,2)
++c--- APPLgrid - this x/z convolution term is live for this event
++            f_X2overZ = 1d0
+             if (kcase == kWgajja) call photonpdffix(fx2z,fxa)
+           endif
+         endif
+@@ -1397,10 +1428,14 @@
+           if (kcase == kWgajja) call photonpdffix(fx2,fxa)
+           if (z > xx(1)) then
+             call fdist(ih1,x1onz,facscale,fx1z,1)
++c--- APPLgrid - this x/z convolution term is live for this event
++            f_X1overZ = 1d0
+             if (kcase == kWgajja) call photonpdffix(fx1z,fxa)
+           endif
+           if (z > xx(2)) then
+             call fdist(ih2,x2onz,facscale,fx2z,2)
++c--- APPLgrid - this x/z convolution term is live for this event
++            f_X2overZ = 1d0
+             if (kcase == kWgajja) call photonpdffix(fx2z,fxa)
+           endif
+         endif
+@@ -1930,6 +1965,25 @@
+      & +(msq_cs(ics,j,k)*(AP(q,q,2)+AP(q,q,3)
+      &                   +R2(q,q,q,cs,2)+R2(q,q,q,cs,3))
+      & + msq_cs(ics,j,g)*(AP(g,q,2)+R2(g,q,q,cs,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++          weightb(j,k)  = weightb(j,k) 
++     &                     + 0d0
++        weightv(j,k)  =  weightv(j,k)
++     & +msq_cs(ics,j,k)*(AP(q,q,1)-AP(q,q,3)
++     &                  +R1(q,q,q,cs,1)-R1(q,q,q,cs,3)
++     &                  +AP(q,q,1)-AP(q,q,3)
++     &                  +R2(q,q,q,cs,1)-R2(q,q,q,cs,3))!*fx1(j)*fx2(k)
++        weightv1(j,k) =  weightv1(j,k)
++     & +(msq_cs(ics,j,k)*(AP(q,q,2)+AP(q,q,3)
++     &                   +R1(q,q,q,cs,2)+R1(q,q,q,cs,3))
++     & + msq_cs(ics,g,k)*(AP(g,q,2)+R1(g,q,q,cs,2)))!*fx1z(j)/z*fx2(k)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(ics,j,k)*(AP(q,q,2)+AP(q,q,3)
++     &                   +R2(q,q,q,cs,2)+R2(q,q,q,cs,3))
++     & + msq_cs(ics,j,g)*(AP(g,q,2)+R2(g,q,q,cs,2))) !*fx1(j)*fx2z(k)/z
++       endif
++c--- APPLgrid - end
+       enddo
+       elseif ((j < 0) .and. (k<0)) then
+       do cs=0,2
+@@ -1949,6 +2003,25 @@
+      & +(msq_cs(ics,j,k)*(AP(a,a,2)+AP(a,a,3)
+      &                  +R2(a,a,a,cs,2)+R2(a,a,a,cs,3))
+      & + msq_cs(ics,j,g)*(AP(g,a,2)+R2(g,a,a,cs,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k)
++     &                     +  0d0
++        weightv(j,k)  = weightv(j,k)
++     & +msq_cs(ics,j,k)*(AP(a,a,1)-AP(a,a,3)
++     &                 +R1(a,a,a,cs,1)-R1(a,a,a,cs,3)
++     &                 +AP(a,a,1)-AP(a,a,3)
++     &                 +R2(a,a,a,cs,1)-R2(a,a,a,cs,3))!*fx1(j)*fx2(k)
++        weightv1(j,k) = weightv1(j,k)
++     & +(msq_cs(ics,j,k)*(AP(a,a,2)+AP(a,a,3)
++     &                  +R1(a,a,a,cs,2)+R1(a,a,a,cs,3))
++     & + msq_cs(ics,g,k)*(AP(g,a,2)+R1(g,a,a,cs,2)))!*fx1z(j)/z*fx2(k)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(ics,j,k)*(AP(a,a,2)+AP(a,a,3)
++     &                  +R2(a,a,a,cs,2)+R2(a,a,a,cs,3))
++     & + msq_cs(ics,j,g)*(AP(g,a,2)+R2(g,a,a,cs,2)))!*fx1(j)*fx2z(k)/z
++       endif
++c--- APPLgrid - end
+ 
+       enddo
+       elseif ((j > 0) .and. (k<0)) then
+@@ -1973,6 +2046,26 @@
+      & +(msq_cs(cs,j,k)*(AP(a,a,2)+AP(a,a,3)
+      &                  +R2(ia,ia,iq,cs,2)+R2(ia,ia,iq,cs,3))
+      & + msq_cs(cs,j,g)*(AP(g,a,2)+R2(g,a,q,cs,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k) 
++     &                     + 0d0
++        weightv(j,k)  = weightv(j,k)
++     & +msq_cs(cs,j,k)*(AP(q,q,1)-AP(q,q,3)
++     &                 +R1(iq,iq,ia,cs,1)-R1(iq,iq,ia,cs,3)
++     &                 +AP(a,a,1)-AP(a,a,3)
++     &                 +R2(ia,ia,iq,cs,1)-R2(ia,ia,iq,cs,3)
++     &                   )!*fx1(j)*fx2(k)
++        weightv1(j,k) = weightv1(j,k)
++     & +(msq_cs(cs,j,k)*(AP(q,q,2)+AP(q,q,3)
++     &                  +R1(iq,iq,ia,cs,2)+R1(iq,iq,ia,cs,3))
++     & + msq_cs(cs,g,k)*(AP(g,q,2)+R1(g,q,a,cs,2)))!*fx1z(j)/z*fx2(k)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(cs,j,k)*(AP(a,a,2)+AP(a,a,3)
++     &                  +R2(ia,ia,iq,cs,2)+R2(ia,ia,iq,cs,3))
++     & + msq_cs(cs,j,g)*(AP(g,a,2)+R2(g,a,q,cs,2)))!*fx1(j)*fx2z(k)/z
++       endif
++c--- APPLgrid - end
+ 
+       enddo
+       elseif ((j < 0) .and. (k>0)) then
+@@ -1997,6 +2090,26 @@
+      & +(msq_cs(cs,j,k)*(AP(q,q,2)+AP(q,q,3)
+      &                  +R2(iq,iq,ia,cs,2)+R2(iq,iq,ia,cs,3))
+      & + msq_cs(cs,j,g)*(AP(g,q,2)+R2(g,q,a,cs,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k) 
++     &                     +  0d0
++        weightv(j,k)  = weightv(j,k)
++     & +msq_cs(cs,j,k)*(AP(a,a,1)-AP(a,a,3)
++     &                 +R1(ia,ia,iq,cs,1)-R1(ia,ia,iq,cs,3)
++     &                 +AP(q,q,1)-AP(q,q,3)
++     &                 +R2(iq,iq,ia,cs,1)-R2(iq,iq,ia,cs,3)
++     &                   )!*fx1(j)*fx2(k)
++        weightv1(j,k) = weightv1(j,k)
++     & +(msq_cs(cs,j,k)*(AP(a,a,2)+AP(a,a,3)
++     &                  +R1(ia,ia,iq,cs,2)+R1(ia,ia,iq,cs,3))
++     & + msq_cs(cs,g,k)*(AP(g,a,2)+R1(g,a,q,cs,2)))!*fx1z(j)/z*fx2(k)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(cs,j,k)*(AP(q,q,2)+AP(q,q,3)
++     &                  +R2(iq,iq,ia,cs,2)+R2(iq,iq,ia,cs,3))
++     & + msq_cs(cs,j,g)*(AP(g,q,2)+R2(g,q,a,cs,2)))!*fx1(j)*fx2z(k)/z
++       endif
++c--- APPLgrid - end
+ 
+       enddo
+       elseif ((j == g) .and. (k == g)) then
+@@ -2020,6 +2133,25 @@
+      & +(msq_cs(cs,g,g)*(AP(g,g,2)+AP(g,g,3)
+      &                  +R2(g,g,g,cs,3)+R2(g,g,g,cs,2))
+      & + msq_gq*(AP(q,g,2)+R2(q,g,g,cs,2)))*fx1(g)*fx2z(g)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k) 
++     &                     +  0d0
++        weightv(j,k)  = weightv(j,k)
++     & +msq_cs(cs,g,g)*(AP(g,g,1)-AP(g,g,3)
++     &                 +R1(g,g,g,cs,1)-R1(g,g,g,cs,3)
++     &                 +AP(g,g,1)-AP(g,g,3)
++     &                 +R2(g,g,g,cs,1)-R2(g,g,g,cs,3))!*fx1(g)*fx2(g)
++        weightv1(j,k) = weightv1(j,k)
++     & +(msq_cs(cs,g,g)*(AP(g,g,2)+AP(g,g,3)
++     &                  +R1(g,g,g,cs,3)+R1(g,g,g,cs,2))
++     & + msq_qg*(AP(q,g,2)+R1(q,g,g,cs,2)))!*fx1z(g)/z*fx2(g)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(cs,g,g)*(AP(g,g,2)+AP(g,g,3)
++     &                  +R2(g,g,g,cs,3)+R2(g,g,g,cs,2))
++     & + msq_gq*(AP(q,g,2)+R2(q,g,g,cs,2)))!*fx1(g)*fx2z(g)/z
++       endif
++c--- APPLgrid - end
+       enddo
+       elseif ((j == g) .and. (k > 0)) then
+ c--- special case for W+bj - remove b-PDF contribution
+@@ -2043,6 +2175,26 @@
+      & +(msq_cs(cs,g,k)*(AP(q,q,2)+AP(q,q,3)
+      &                +R2(q,q,g,cs,2)+R2(q,q,g,cs,3))
+      & + msq_cs(cs,g,g)*(AP(g,q,2)+R2(g,q,g,cs,2)))*fx1(g)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k) 
++     &                     +  0d0
++        weightv(j,k)  = weightv(j,k)
++     & +msq_cs(cs,g,k)*(AP(g,g,1)-AP(g,g,3)
++     &                 +R1(g,g,q,cs,1)-R1(g,g,q,cs,3)
++     &                 +AP(q,q,1)-AP(q,q,3)
++     &                 +R2(q,q,g,cs,1)-R2(q,q,g,cs,3))!*fx1(g)*fx2(k)
++        weightv1(j,k) = weightv1(j,k)
++     & +(msq_cs(cs,g,k)*(AP(g,g,2)+AP(g,g,3)
++     &                  +R1(g,g,q,cs,2)+R1(g,g,q,cs,3))
++     & + msq_aq*(AP(a,g,2)+R1(a,g,q,cs,2))
++     & + msq_qq*(AP(q,g,2)+R1(q,g,q,cs,2)))!*fx1z(g)/z*fx2(k)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(cs,g,k)*(AP(q,q,2)+AP(q,q,3)
++     &                +R2(q,q,g,cs,2)+R2(q,q,g,cs,3))
++     & + msq_cs(cs,g,g)*(AP(g,q,2)+R2(g,q,g,cs,2)))!*fx1(g)*fx2z(k)/z
++       endif
++c--- APPLgrid - end
+ 
+       enddo
+       endif
+@@ -2069,6 +2221,26 @@
+      & +(msq_cs(cs,g,k)*(AP(a,a,2)+AP(a,a,3)
+      &                  +R2(a,a,g,cs,2)+R2(a,a,g,cs,3))
+      & + msq_cs(cs,g,g)*(AP(g,a,2)+R2(g,a,g,cs,2)))*fx1(g)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k) 
++     &                     +  0d0
++        weightv(j,k)  = weightv(j,k)
++     & +msq_cs(cs,g,k)*(AP(g,g,1)-AP(g,g,3)
++     &                 +R1(g,g,a,cs,1)-R1(g,g,a,cs,3)
++     &                 +AP(a,a,1)-AP(a,a,3)
++     &                 +R2(a,a,g,cs,1)-R2(a,a,g,cs,3))!*fx1(g)*fx2(k)
++        weightv1(j,k) = weightv1(j,k)
++     & +(msq_cs(cs,g,k)*(AP(g,g,2)+AP(g,g,3)
++     &                  +R1(g,g,a,cs,2)+R1(g,g,a,cs,3))
++     & + msq_qa*(AP(q,g,2)+R1(q,g,a,cs,2))
++     & + msq_aa*(AP(a,g,2)+R1(a,g,a,cs,2)))!*fx1z(g)/z*fx2(k)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(cs,g,k)*(AP(a,a,2)+AP(a,a,3)
++     &                  +R2(a,a,g,cs,2)+R2(a,a,g,cs,3))
++     & + msq_cs(cs,g,g)*(AP(g,a,2)+R2(g,a,g,cs,2)))!*fx1(g)*fx2z(k)/z
++       endif
++c--- APPLgrid - end
+ 
+       enddo
+       endif
+@@ -2095,6 +2267,26 @@
+      &                 +R2(g,g,q,cs,2)+R2(g,g,q,cs,3))
+      &+ msq_qa*(AP(a,g,2)+R2(a,g,q,cs,2))
+      &+ msq_qq*(AP(q,g,2)+R2(q,g,q,cs,2)))*fx1(j)*fx2z(g)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k) 
++     &                     +  0d0
++        weightv(j,k)  = weightv(j,k)
++     &+ msq_cs(cs,j,g)*(AP(q,q,1)-AP(q,q,3)
++     &                 +R1(q,q,g,cs,1)-R1(q,q,g,cs,3)
++     &                 +R2(g,g,q,cs,1)-R2(g,g,q,cs,3)
++     &                 +AP(g,g,1)-AP(g,g,3))!*fx1(j)*fx2(g)
++        weightv1(j,k) = weightv1(j,k)
++     &+(msq_cs(cs,j,g)*(AP(q,q,2)+AP(q,q,3)
++     &                 +R1(q,q,g,cs,2)+R1(q,q,g,cs,3))
++     &+ msq_cs(cs,g,g)*(AP(g,q,2)+R1(g,q,g,cs,2)))!*fx1z(j)/z*fx2(g)
++        weightv2(j,k) = weightv2(j,k) 
++     &+(msq_cs(cs,j,g)*(AP(g,g,2)+AP(g,g,3)
++     &                 +R2(g,g,q,cs,2)+R2(g,g,q,cs,3))
++     &+ msq_qa*(AP(a,g,2)+R2(a,g,q,cs,2))
++     &+ msq_qq*(AP(q,g,2)+R2(q,g,q,cs,2)))!*fx1(j)*fx2z(g)/z
++       endif
++c--- APPLgrid - end
+ 
+       enddo
+       endif
+@@ -2121,6 +2313,26 @@
+      &                  +R2(g,g,a,cs,2)+R2(g,g,a,cs,3))
+      & + msq_aq*(AP(q,g,2)+R2(q,g,a,cs,2))
+      & + msq_aa*(AP(a,g,2)+R2(a,g,a,cs,2)))*fx1(j)*fx2z(g)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++       if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++        weightb(j,k)  = weightb(j,k) 
++     &                     +  0d0
++        weightv(j,k)  = weightv(j,k)
++     & + msq_cs(cs,j,g)*(AP(a,a,1)-AP(a,a,3)
++     &                  +R1(a,a,g,cs,1)-R1(a,a,g,cs,3)
++     &                  +AP(g,g,1)-AP(g,g,3)
++     &                  +R2(g,g,a,cs,1)-R2(g,g,a,cs,3))!*fx1(j)*fx2(g)
++        weightv1(j,k) = weightv1(j,k)
++     & +(msq_cs(cs,j,g)*(AP(a,a,2)+AP(a,a,3)
++     &                  +R1(a,a,g,cs,2)+R1(a,a,g,cs,3))
++     & + msq_cs(cs,g,g)*(AP(g,a,2)+R1(g,a,g,cs,2)))!*fx1z(j)/z*fx2(g)
++        weightv2(j,k) = weightv2(j,k) 
++     & +(msq_cs(cs,j,g)*(AP(g,g,2)+AP(g,g,3)
++     &                  +R2(g,g,a,cs,2)+R2(g,g,a,cs,3))
++     & + msq_aq*(AP(q,g,2)+R2(q,g,a,cs,2))
++     & + msq_aa*(AP(a,g,2)+R2(a,g,a,cs,2)))!*fx1(j)*fx2z(g)/z
++       endif
++c--- APPLgrid - end
+ 
+       enddo
+       endif
+@@ -2335,6 +2547,23 @@
+      & + msq(g,k)*(AP(g,q,2)+Q1(g,q,q,2)))*fx1z(j)/z*fx2(k)
+      & +(msq(j,k)*(AP(q,q,2)+AP(q,q,3)+Q2(q,q,q,2)+Q2(q,q,q,3))
+      & + msq(j,g)*(AP(g,q,2)+Q2(g,q,q,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)   = weightb(j,k) +
++     &        msq(j,k)
++         weightv(j,k)   =  weightv(j,k)   +
++     & (msqv(j,k)
++     &   + msq(j,k)*(zip+AP(q,q,1)-AP(q,q,3)+Q1(q,q,q,1)-Q1(q,q,q,3)
++     &   + AP(q,q,1)-AP(q,q,3)+Q2(q,q,q,1)-Q2(q,q,q,3))) 
++     &                          !*fx1(j)*fx2(k)
++         weightv1(j,k) =  weightv1(j,k) + 
++     &  (msq(j,k)*(AP(q,q,2)+AP(q,q,3)+Q1(q,q,q,2)+Q1(q,q,q,3))
++     &    + msq(g,k)*(AP(g,q,2)+Q1(g,q,q,2)))!*fx1z(j)/z*fx2(k)
++        weightv2(j,k) = weightv2(j,k) +
++     &    (msq(j,k)*(AP(q,q,2)+AP(q,q,3)+Q2(q,q,q,2)+Q2(q,q,q,3))
++     &    + msq(j,g)*(AP(g,q,2)+Q2(g,q,q,2)))!*fx1(j)*fx2z(k)/z
++      endif
++c--- APPLgrid - end
+ 
+       endif
+ c--QbarQbar
+@@ -2370,6 +2599,23 @@
+      & + msq(g,k)*(AP(g,a,2)+Q1(g,a,a,2)))*fx1z(j)/z*fx2(k)
+      & +(msq(j,k)*(AP(a,a,2)+AP(a,a,3)+Q2(a,a,a,2)+Q2(a,a,a,3))
+      & + msq(j,g)*(AP(g,a,2)+Q2(g,a,a,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  = weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  = weightv(j,k)  +
++     &        (msqv(j,k)
++     &   + msq(j,k)*(zip+AP(a,a,1)-AP(a,a,3)+Q1(a,a,a,1)-Q1(a,a,a,3)
++     &   +AP(a,a,1)-AP(a,a,3)+Q2(a,a,a,1)-Q2(a,a,a,3)))
++     &                          !*fx1(j)*fx2(k)
++         weightv1(j,k) =          weightv1(j,k) +
++     &     (msq(j,k)*(AP(a,a,2)+AP(a,a,3)+Q1(a,a,a,2)+Q1(a,a,a,3))
++     &      + msq(g,k)*(AP(g,a,2)+Q1(g,a,a,2)))!*fx1z(j)/z*fx2(k)
++        weightv2(j,k) =         weightv2(j,k) +
++     &      (msq(j,k)*(AP(a,a,2)+AP(a,a,3)+Q2(a,a,a,2)+Q2(a,a,a,3))
++     &      + msq(j,g)*(AP(g,a,2)+Q2(g,a,a,2)))!*fx1(j)*fx2z(k)/z
++      endif
++c--- APPLgrid - end
+ 
+       endif
+ c--QQbar
+@@ -2382,6 +2628,23 @@
+      & + msq(g,k)*(AP(g,q,2)+Q1(g,q,a,2)))*fx1z(j)/z*fx2(k)
+      & +(msq(j,k)*(AP(a,a,2)+AP(a,a,3)+Q2(a,a,q,3)+Q2(a,a,q,2))
+      & + msq(j,g)*(AP(g,a,2)+Q2(g,a,q,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  = weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  =  weightv(j,k)  +
++     &        (msqv(j,k)
++     & + msq(j,k)*(zip+AP(q,q,1)-AP(q,q,3)+Q1(q,q,a,1)-Q1(q,q,a,3)
++     &                +AP(a,a,1)-AP(a,a,3)+Q2(a,a,q,1)-Q2(a,a,q,3))) 
++     &        !*fx1(j)*fx2(k)
++         weightv1(j,k) =         weightv1(j,k) +
++     & (msq(j,k)*(AP(q,q,2)+AP(q,q,3)+Q1(q,q,a,3)+Q1(q,q,a,2))
++     & + msq(g,k)*(AP(g,q,2)+Q1(g,q,a,2)))!*fx1z(j)/z*fx2(k)
++         weightv2(j,k) =          weightv2(j,k) +
++     & (msq(j,k)*(AP(a,a,2)+AP(a,a,3)+Q2(a,a,q,3)+Q2(a,a,q,2))
++     & + msq(j,g)*(AP(g,a,2)+Q2(g,a,q,2)))!*fx1(j)*fx2z(k)/z
++      endif
++c--- APPLgrid - end
+ 
+       elseif ((j < 0) .and. (k>0)) then
+ c--QbarQ
+@@ -2393,6 +2656,23 @@
+      & + msq(g,k)*(AP(g,a,2)+Q1(g,a,q,2)))*fx1z(j)/z*fx2(k)
+      & +(msq(j,k)*(AP(q,q,3)+AP(q,q,2)+Q2(q,q,a,3)+Q2(q,q,a,2))
+      & + msq(j,g)*(AP(g,q,2)+Q2(g,q,a,2)))*fx1(j)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  = weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  =   weightv(j,k)  +
++     &        (msqv(j,k)
++     & +msq(j,k)*(zip+AP(a,a,1)-AP(a,a,3)+Q1(a,a,q,1)-Q1(a,a,q,3)
++     &               +AP(q,q,1)-AP(q,q,3)+Q2(q,q,a,1)-Q2(q,q,a,3)))
++     &        ! *fx1(j)*fx2(k)
++         weightv1(j,k) =    weightv1(j,k) +
++     & (msq(j,k)*(AP(a,a,3)+AP(a,a,2)+Q1(a,a,q,3)+Q1(a,a,q,2))
++     & + msq(g,k)*(AP(g,a,2)+Q1(g,a,q,2)))!*fx1z(j)/z*fx2(k)
++         weightv2(j,k) =  weightv2(j,k) +
++     & (msq(j,k)*(AP(q,q,3)+AP(q,q,2)+Q2(q,q,a,3)+Q2(q,q,a,2))
++     & + msq(j,g)*(AP(g,q,2)+Q2(g,q,a,2)))!*fx1(j)*fx2z(k)/z
++      endif
++c--- APPLgrid - end
+ 
+       elseif ((j == g) .and. (k==g)) then
+ c--gg
+@@ -2422,6 +2702,23 @@
+      &  +   msq_qg*(AP(q,g,2)+Q1(q,g,g,2)))*fx1z(g)/z*fx2(g)
+      &  +(msq(g,g)*(AP(g,g,2)+AP(g,g,3)+Q2(g,g,g,2)+Q2(g,g,g,3))
+      &  +   msq_gq*(AP(q,g,2)+Q2(q,g,g,2)))*fx1(g)*fx2z(g)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  =  weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  =  weightv(j,k)  +
++     &        (msqv(j,k)
++     &  +msq(g,g)*(zip+AP(g,g,1)-AP(g,g,3)+Q1(g,g,g,1)-Q1(g,g,g,3)
++     &                +AP(g,g,1)-AP(g,g,3)+Q2(g,g,g,1)-Q2(g,g,g,3)))
++     &        ! *fx1(g)*fx2(g)
++         weightv1(j,k) =    weightv1(j,k) +
++     &  (msq(g,g)*(AP(g,g,2)+AP(g,g,3)+Q1(g,g,g,2)+Q1(g,g,g,3))
++     &  +   msq_qg*(AP(q,g,2)+Q1(q,g,g,2)))!*fx1z(g)/z*fx2(g)
++         weightv2(j,k) =   weightv2(j,k) +
++     & (msq(g,g)*(AP(g,g,2)+AP(g,g,3)+Q2(g,g,g,2)+Q2(g,g,g,3))
++     &  +   msq_gq*(AP(q,g,2)+Q2(q,g,g,2)))!*fx1(g)*fx2z(g)/z
++      endif
++c--- APPLgrid - end
+ 
+       endif
+       elseif (j == g) then
+@@ -2438,6 +2735,24 @@
+      & +   msq_qq*(AP(q,g,2)+Q1(q,g,q,2)))*fx1z(g)/z*fx2(k)
+      & +(msq(g,k)*(AP(q,q,2)+AP(q,q,3)+Q2(q,q,g,2)+Q2(q,q,g,3))
+      & + msq(g,g)*(AP(g,q,2)+Q2(g,q,g,2)))*fx1(g)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  =  weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  =  weightv(j,k)  +
++     &        (msqv(j,k)
++     & +msq(g,k)*(zip+AP(g,g,1)-AP(g,g,3)+Q1(g,g,q,1)-Q1(g,g,q,3)
++     &               +AP(q,q,1)-AP(q,q,3)+Q2(q,q,g,1)-Q2(q,q,g,3)))
++     &        !*fx1(g)*fx2(k)
++         weightv1(j,k) =    weightv1(j,k) +
++     & (msq(g,k)*(AP(g,g,2)+AP(g,g,3)+Q1(g,g,q,2)+Q1(g,g,q,3))
++     & +   msq_aq*(AP(a,g,2)+Q1(a,g,q,2))
++     & +   msq_qq*(AP(q,g,2)+Q1(q,g,q,2)))!*fx1z(g)/z*fx2(k)
++         weightv2(j,k) =    weightv2(j,k) +
++     & (msq(g,k)*(AP(q,q,2)+AP(q,q,3)+Q2(q,q,g,2)+Q2(q,q,g,3))
++     & + msq(g,g)*(AP(g,q,2)+Q2(g,q,g,2)))!*fx1(g)*fx2z(k)/z
++      endif
++c--- APPLgrid - end
+ 
+        if     ((kcase==kbq_tpq) .and. (k  /=  5)
+      &   .and. (masslessb .eqv. .false.)) then
+@@ -2462,6 +2777,24 @@
+      & +   msq_aa*(AP(a,g,2)+Q1(a,g,a,2)))*fx1z(g)/z*fx2(k)
+      & +(msq(g,k)*(AP(a,a,2)+AP(a,a,3)+Q2(a,a,g,2)+Q2(a,a,g,3))
+      & + msq(g,g)*(AP(g,a,2)+Q2(g,a,g,2)))*fx1(g)*fx2z(k)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  =  weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  =  weightv(j,k)  +
++     &        (msqv(j,k)
++     & +msq(g,k)*(zip+AP(g,g,1)-AP(g,g,3)+Q1(g,g,a,1)-Q1(g,g,a,3)
++     &               +AP(a,a,1)-AP(a,a,3)+Q2(a,a,g,1)-Q2(a,a,g,3)))
++     &        !*fx1(g)*fx2(k)
++         weightv1(j,k) =    weightv1(j,k) +
++     & (msq(g,k)*(AP(g,g,2)+AP(g,g,3)+Q1(g,g,a,2)+Q1(g,g,a,3))
++     & +   msq_qa*(AP(q,g,2)+Q1(q,g,a,2))
++     & +   msq_aa*(AP(a,g,2)+Q1(a,g,a,2)))!*fx1z(g)/z*fx2(k)
++         weightv2(j,k) =   weightv2(j,k) +
++     & (msq(g,k)*(AP(a,a,2)+AP(a,a,3)+Q2(a,a,g,2)+Q2(a,a,g,3))
++     & + msq(g,g)*(AP(g,a,2)+Q2(g,a,g,2)))!*fx1(g)*fx2z(k)/z
++      endif
++c--- APPLgrid - end
+ 
+        if     ((kcase==kbq_tpq) .and. (k  /=  -5)
+      &   .and. (masslessb .eqv. .false.)) then
+@@ -2489,6 +2822,25 @@
+      & +(msq(j,g)*(AP(g,g,2)+AP(g,g,3)+Q2(g,g,q,2)+Q2(g,g,q,3))
+      & +   msq_qa*(AP(a,g,2)+Q2(a,g,q,2))
+      & +   msq_qq*(AP(q,g,2)+Q2(q,g,q,2)))*fx1(j)*fx2z(g)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  =  weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  = weightv(j,k)  +
++     &        (msqv(j,k)
++     &        +msq(j,g)*(zip
++     &        +AP(q,q,1)-AP(q,q,3)+Q1(q,q,g,1)-Q1(q,q,g,3)
++     &        +AP(g,g,1)-AP(g,g,3)+Q2(g,g,q,1)-Q2(g,g,q,3)))
++     &        !*fx1(j)*fx2(g)
++         weightv1(j,k) =    weightv1(j,k) +
++     & (msq(j,g)*(AP(q,q,2)+AP(q,q,3)+Q1(q,q,g,2)+Q1(q,q,g,3))
++     & + msq(g,g)*(AP(g,q,2)+Q1(g,q,g,2)))!*fx1z(j)/z*fx2(g)
++         weightv2(j,k) =    weightv2(j,k) +
++     &  (msq(j,g)*(AP(g,g,2)+AP(g,g,3)+Q2(g,g,q,2)+Q2(g,g,q,3))
++     &  + msq_qa*(AP(a,g,2)+Q2(a,g,q,2))
++     &  + msq_qq*(AP(q,g,2)+Q2(q,g,q,2)))!*fx1(j)*fx2z(g)/z
++      endif
++c--- APPLgrid - end
+ 
+        if     ((kcase==kbq_tpq) .and. (j  /=  5)
+      &   .and. (masslessb .eqv. .false.)) then
+@@ -2513,6 +2865,24 @@
+      & +(msq(j,g)*(AP(g,g,2)+AP(g,g,3)+Q2(g,g,a,3)+Q2(g,g,a,2))
+      & + msq_aq*(AP(q,g,2)+Q2(q,g,a,2))
+      & + msq_aa*(AP(a,g,2)+Q2(a,g,a,2)))*fx1(j)*fx2z(g)/z
++c--- APPLgrid - collect weights (ported from MCFM 6.8 virtint.f)
++      if((currentPDF.eq.0).and.creategrid.and.ag_fill.and.bin)then
++         weightb(j,k)  =  weightb(j,k)  +
++     &        msq(j,k)
++         weightv(j,k)  =  weightv(j,k)  +
++     &        (msqv(j,k)
++     & +msq(j,g)*(zip+AP(a,a,1)-AP(a,a,3)+Q1(a,a,g,1)-Q1(a,a,g,3)
++     &               +AP(g,g,1)-AP(g,g,3)+Q2(g,g,a,1)-Q2(g,g,a,3)))
++     &        !*fx1(j)*fx2(g)
++         weightv1(j,k) =   weightv1(j,k) +
++     & (msq(j,g)*(AP(a,a,2)+AP(a,a,3)+Q1(a,a,g,2)+Q1(a,a,g,3))
++     & + msq(g,g)*(AP(g,a,2)+Q1(g,a,g,2))) !*fx1z(j)/z*fx2(g)
++         weightv2(j,k) =   weightv2(j,k) +
++     & (msq(j,g)*(AP(g,g,2)+AP(g,g,3)+Q2(g,g,a,3)+Q2(g,g,a,2))
++     & + msq_aq*(AP(q,g,2)+Q2(q,g,a,2))
++     & + msq_aa*(AP(a,g,2)+Q2(a,g,a,2)))!*fx1(j)*fx2z(g)/z
++      endif
++c--- APPLgrid - end
+ 
+        if     ((kcase==kbq_tpq) .and. (j  /=  -5)
+      &   .and. (masslessb .eqv. .false.)) then
+@@ -2640,6 +3010,48 @@
+       endif
+ 
+       if (bin) then
++
++c--- APPLgrid - publish the virtual/collinear event.
++c--- psCR strips the extra power of alpha_s: APPLgrid re-applies alpha_s at
++c--- convolution time, so the stored weight must not already contain it.
++c--- weightb holds the Born-like piece inside virtint and carries psCR0=1.
++c--- weightv1/weightv2 additionally carry the PDF-argument Jacobian f_X*overZ/z.
++         if (creategrid .and. ag_fill) then
++            psCR  = 1d0/ason2pi
++            psCR0 = 1d0
++            do j=-nflav,nflav
++               do k=-nflav,nflav
++                  weightb (j,k) = weightb(j,k)*psCR0
++                  weightv (j,k) = weightv(j,k)*psCR
++                  weightv1(j,k) = weightv1(j,k)*psCR*f_X1overZ/z
++                  weightv2(j,k) = weightv2(j,k)*psCR*f_X2overZ/z
++               enddo
++            enddo
++            contrib      = 300
++            weightfactor = flux*xjac*pswt*wgt/BrnRat/ag_niter
++            ag_xx1   = xx(1)
++            ag_xx2   = xx(2)
++c--- x1onz/x2onz are set only when z > xx(1)/xx(2); with -finit-local-zero
++c--- they are 0 otherwise, and the bridge feeds them straight to APPLgrid as
++c--- Bjorken x. x=0 is -infinity in log(x) space and makes the grid allocate
++c--- without bound. The weight is already zero in that case (f_X*overZ = 0),
++c--- so fall back to an in-range coordinate.
++            if (f_X1overZ > 0d0) then
++               ag_x1z = x1onz
++            else
++               ag_x1z = xx(1)
++            endif
++            if (f_X2overZ > 0d0) then
++               ag_x2z = x2onz
++            else
++               ag_x2z = xx(2)
++            endif
++            ag_scale = facscale
++            refwt    = val/ag_niter
++            refwt2   = val2/ag_niter
++         endif
++c--- APPLgrid - end
++
+ c--- for EW corrections, make additional weight available inside common block
+         if (kewcorr /= knone) then
+           wt_noew=virtint_noew*wgt
+--- a/src/Procdep/realint.f
++++ b/src/Procdep/realint.f
+@@ -35,6 +35,15 @@
+       include 'nflav.f'
+       include 'vegas_common.f'
+       include 'ptilde.f'
++c--- APPLgrid. weightr is dimensioned (0:maxd,...), so maxd must already be in
++c--- scope when APPLinclude.f is processed. realint gets maxd from ptilde.f
++c--- above -- hence this include sits AFTER it, and maxd.f must NOT be included
++c--- again here or gfortran rejects it with
++c---   "Symbol 'maxd' already has basic type of INTEGER".
++c--- (lowint.f and virtint.f differ: they have no ptilde.f, so they include
++c--- maxd.f themselves immediately before APPLinclude.f.)
++      include 'APPLinclude.f'
++      double precision psCR
+       include 'phasemin.f'
+       include 'xmin.f'
+       include 'new_pspace.f'
+@@ -962,6 +971,21 @@
+       xmsq = 0._dp
+       bbfrac = 0._dp
+ 
++c--- APPLgrid - initialise the per-event weight accumulator. BEFORE label 777:
++c--- 777 is the top of the PDF-set loop, so zeroing inside it would discard the
++c--- weights on the final PDF iteration.
++      if (creategrid .and. ag_fill .and. bin) then
++         do nd=0,maxd
++            do j=-nf,nf
++               do k=-nf,nf
++                  weightr(nd,j,k) = 0d0
++               enddo
++            enddo
++         enddo
++         weightfactor = 1d0
++      endif
++c--- APPLgrid - end
++
+       flux=fbGeV2/(two*xx1*xx2*W)
+ 
+ c--- initialize a PDF set here, if calculating errors
+@@ -1206,6 +1230,11 @@
+       endif
+ 
+       xmsq(0)=xmsq(0)+xmsqjk
++c--- APPLgrid - save the PDF-stripped real matrix element (dipole index 0)
++      if (currentPDF == 0 .and. creategrid .and. ag_fill .and. bin) then
++         weightr(0,j,k) = weightr(0,j,k) + msq(j,k)
++      endif
++c--- APPLgrid - end
+ 
+       if (doscalevar .and. currentPDF == 0 .and. bin) then
+         if (dynamicscale) then
+@@ -1256,6 +1285,11 @@
+         endif
+ 
+         xmsq(nd)=xmsq(nd)+xmsqjk
++c--- APPLgrid - save the PDF-stripped dipole subtraction term
++        if (currentPDF == 0 .and. creategrid .and. ag_fill .and. bin) then
++           weightr(nd,j,k) = weightr(nd,j,k) + (-msqc(nd,j,k))
++        endif
++c--- APPLgrid - end
+ 
+       enddo
+ 
+@@ -1357,6 +1391,27 @@
+                       endif
+                   endif
+ 
++c--- APPLgrid - publish this dipole. contrib=200 marks a real-emission
++c--- contribution and dipole=nd tells the bridge which subtraction term it is.
++c--- psCR removes the extra power of alpha_s carried by the real ME.
++                  if (creategrid .and. ag_fill) then
++                     psCR = 1d0/ason2pi
++                     do j=-nflav,nflav
++                        do k=-nflav,nflav
++                           weightr(nd,j,k) = weightr(nd,j,k)*psCR
++                        enddo
++                     enddo
++                     contrib      = 200
++                     dipole       = nd
++                     weightfactor = wgt*flux*pswt/BrnRat/ag_niter
++                     ag_xx1       = xx1
++                     ag_xx2       = xx2
++                     ag_scale     = facscale
++                     refwt        = xmsq(nd)*wgt/ag_niter
++                     refwt2       = (xmsq(nd)*wgt)**2/ag_niter
++                  endif
++c--- APPLgrid - end
++
+                   currentNd = nd
+                   call getptildejet(nd,pjet)
+                   call dotem(nvec,pjet,s)
+--- a/src/User/nplotter.f
++++ b/src/User/nplotter.f
+@@ -30,6 +30,11 @@
+       include 'mxpart.f'
+       include 'cplx.h'
+       include 'kprocess.f'
++c--- APPLgrid - creategrid flag and the contrib marker set by the
++c--- fixed-order integrands
++      include 'maxd.f'
++      include 'APPLinclude.f'
++c--- APPLgrid - end
+       include 'nplot.f'
+       include 'nproc.f'
+       include 'first.f'
+@@ -336,6 +341,23 @@
+ 
+  888  continue
+ 
++c--- APPLgrid - fill the grid for this event.
++c--- FIXED ORDER ONLY. The resummed (CuTe) contributions are deliberately
++c--- excluded: APPLgrid stores partonic weights and re-convolves a PDF later,
++c--- which works because a fixed-order cross section is LINEAR in the PDFs.
++c--- Resummation is not - its beam functions convolve PDFs with kernels at a
++c--- b-space-dependent scale - so it cannot be represented in this form.
++c--- contrib is set only by the fixed-order integrands (lowint/virtint/
++c--- realint); it stays 0 on any resummed path, which is what gates this call.
++      if (creategrid .and. (contrib /= 0)) call fill_grid(p)
++c--- Reset the marker AFTER filling. An integrand sets contrib only on its
++c--- success path, so without this reset an event that returns early (failed
++c--- cuts, unphysical x, etc.) would be filled again with the PREVIOUS event's
++c--- stale weights. Resetting here rather than on entry to each integrand
++c--- covers every fixed-order path uniformly.
++      contrib = 0
++c--- APPLgrid - end
++
+       first = .false.
+ 
+       return
+--- a/src/Need/mcfm_exit.f
++++ b/src/Need/mcfm_exit.f
+@@ -19,6 +19,17 @@
+ 
+       real(dp), intent(in) :: xinteg, xinteg_err
+ 
++c--- APPLgrid. /grid/ is declared inline: including APPLinclude.f here would
++c--- also bring in the per-event weight arrays (weightr is dimensioned
++c--- (0:maxd,...) and needs maxd.f included first), none of which this routine
++c--- uses. Only creategrid is read.
++      logical creategrid
++      integer nSubProcess
++      common/grid/creategrid,nSubProcess
++      double precision ag_niter,ag_totcall
++      logical ag_fill
++      common/gridnorm/ag_niter,ag_totcall,ag_fill
++
+       if (rank == 0) then
+           call finalizeStorage
+ 
+@@ -55,6 +66,13 @@
+           call writeAllHistograms()
+           endif
+ 
++c--- APPLgrid - write out the grid. Mirrors MCFM 6.8 mcfm_exit.f:173. Without
++c--- this the grid is booked and filled but never serialised, and the run ends
++c--- with a correct cross section and no .root file.
++          if (creategrid) then
++             call write_grid(xinteg)
++          endif
++
+       endif
+ 
+ #ifdef HAVE_COARRAY
+--- a/src/Need/parseinput.f90
++++ b/src/Need/parseinput.f90
+@@ -244,6 +244,11 @@
+     call cfg_add(cfg, "extra%verbose", .false., "verbose output")
+     call cfg_add(cfg, "extra%new_pspace", .true., "use new_pspace")
+     call cfg_add(cfg, "extra%nohistograms", .false., "generate no additional histograms")
++    ! APPLgrid: write a grid of PDF-stripped partonic weights alongside the run.
++    ! FIXED ORDER ONLY -- the resummed (CuTe) contributions are not gridded,
++    ! because APPLgrid's re-convolution assumes the cross section is linear in
++    ! the PDFs and resummation is not.
++    call cfg_add(cfg, "extra%creategrid", .false., "write an APPLgrid (fixed order only)")
+     call cfg_add(cfg, "extra%benchmark", "none", "benchmark to run")
+     call cfg_add(cfg, "extra%pdfchannels", "", "constraints for PDF channels")
+     call cfg_add(cfg, "extra%griddebug", .false., "print grid")
+@@ -276,6 +281,12 @@
+     include 'cplx.h'
+     include 'constants.f'
+     include 'maxwt.f'! for nevtrequested
++    ! APPLgrid common block, declared inline rather than via APPLinclude.f:
++    ! that header uses fixed-form column-6 continuation and this file is
++    ! free-form F90, so including it here would not compile.
++    logical :: creategrid
++    integer :: nSubProcess
++    common/grid/creategrid,nSubProcess
+     include 'outputoptions.f'! writetop, etc.
+     include 'vdecayid.f'! vdecayid, v34id, v56id
+     include 'nproc.f'
+@@ -696,6 +707,7 @@
+ 
+     call cfg_get_add(cfg, "extra%debug", debug, .false., "debug")
+     call cfg_get(cfg, "extra%verbose", verbose)
++    call cfg_get(cfg, "extra%creategrid", creategrid)
+ 
+     call cfg_get_add(cfg, "extra%toponly", toponly, .false., "")
+     call cfg_get(cfg, "extra%new_pspace", new_pspace)
+--- a/src/Mods/mod_MCFMStorage.f90
++++ b/src/Mods/mod_MCFMStorage.f90
+@@ -1223,6 +1223,12 @@
+         implicit none
+         type(IntegrationInfo), intent(inout) :: info
+         integer, intent(in) :: stage, ndim, niter
++
++        ! APPLgrid accounting. Declared inline: APPLinclude.f is fixed-form.
++        ! See src/Inc/APPLinclude.f for why these exist -- 10.3 never sets itmx.
++        double precision ag_niter, ag_totcall
++        logical ag_fill
++        common/gridnorm/ag_niter, ag_totcall, ag_fill
+         interface
+             function fxn(vector,wgt)
+                 use types
+@@ -1375,6 +1381,16 @@
+         call cpu_time(time_start)
+         call system_clock(count_start, count_rate)
+ 
++        ! --- APPLgrid: publish the real iteration accounting -------------
++        ! stage 0 is the VEGAS warmup; filling the grid there would mix
++        ! warmup events into the production grid, so gate on stage >= 1.
++        ag_niter = dble(niter)
++        ag_fill  = (stage >= 1)
++        if (ag_fill) then
++            ag_totcall = ag_totcall + dble(info%callsPerIt) * dble(niter)
++        endif
++        ! -----------------------------------------------------------------
++
+         iterationLoop: do it=1,niter
+             ! reset accumulators for each iteration
+             fsum = 0._dp

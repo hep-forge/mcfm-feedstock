@@ -1,0 +1,94 @@
+--- a/src/mcfm_grid.h
++++ b/src/mcfm_grid.h
+@@ -69,21 +69,69 @@
+ 
+ 
+ 
++/* MCFM 6.8 kept the VEGAS pass counts in /iterat/ as itmx1/ncall1/itmx2/ncall2.
++   MCFM 10.3 has NO /iterat/ common at all -- it stores the counts in the VEGAS
++   commons declared in src/Inc/vegas_common.f:
++
++       integer      :: ndim,itmx,nprn      common/bveg1int/
++       integer(kind=8) ncall                common/bveg1int8/
++
++   ncall is 64-bit in 10.3, hence int64_t. Neither common is threadprivate in
++   10.3 (checked), so these are plain externs. */
++typedef struct  {
++    int ndim, itmx, nprn;
++} __bveg1int__;
++
+ typedef struct  {
+-    int itmx1, ncall1, itmx2, ncall2;
+-} __iterat__;
++    long long ncall;   /* Fortran integer(kind=8) */
++} __bveg1int8__;
+ 
+ 
+  
+ 
+ extern "C" __ckm__   ckm_;
+ extern "C" __cabib__ cabib_;
+-extern "C" __gridevent__  gridevent_;
+-extern "C" __gridweight__ gridweight_;
++/* MCFM 10.3 runs its fixed-order integrands under OpenMP and declares several
++ * common blocks `!$omp threadprivate`. A threadprivate Fortran common maps to a
++ * TLS symbol, and the linker refuses to reconcile a TLS definition with a
++ * non-TLS extern reference:
++ *
++ *   nflav_: TLS reference in fillcoupfac.f.o mismatches non-TLS reference
++ *           in libmcfmbridge.a(mcfm_grid.o)
++ *
++ * So the blocks that are threadprivate on the Fortran side must be declared
++ * __thread here. Against MCFM 6.8, where nothing is threadprivate, this must
++ * stay off -- hence the guard. Verified against 10.3's src/Inc: exactly
++ * /nflav/ and /qcdcouple/ carry the directive, plus the grid accumulators we
++ * add ourselves (/gridweight/ and /gridevent/, but NOT /grid/, which is
++ * read-only config set once on the master thread).
++ */
++/* This tree is the 10.3-only bridge, so this is unconditional. Threading a
++ * -D through the autotools build proved unreliable (the flag reached the
++ * Makefile but not the compile line, leaving plain GOT relocations). */
++#define MCFM_TLS __thread
++
++extern "C" MCFM_TLS __gridevent__  gridevent_;
++extern "C" MCFM_TLS __gridweight__ gridweight_;
+ extern "C" __nproc__  nproc_;
+-extern "C" __nflav__  nflav_;
++extern "C" MCFM_TLS __nflav__  nflav_;
+ extern "C" __energy__ energy_;
+-extern "C" __iterat__ iterat_;
++/* MCFM 10.3 never assigns itmx/ncall, so /bveg1int/ above reads back as ZERO
++   and using it both NaN-ed every weight and left run()=0. The real accounting
++   is published by integrate() into /gridnorm/ (see src/Inc/APPLinclude.f).
++   Members are doubles precisely so there is no Fortran integer-kind vs C
++   padding ambiguity; ag_fill is a Fortran logical, 4 bytes -> int. Only
++   totcall is read here, at offset 8, so trailing padding is irrelevant. */
++typedef struct {
++    double niter;
++    double totcall;
++    int    fill;
++} __gridnorm__;
++
++extern "C" __gridnorm__ gridnorm_;
++
++extern "C" __bveg1int__  bveg1int_;
++extern "C" __bveg1int8__ bveg1int8_;
+ 
+ 
+ 
+--- a/src/mcfm_interface.cxx
++++ b/src/mcfm_interface.cxx
+@@ -663,7 +663,12 @@
+       
+ 
+       mygrid[igrid]->setNormalised( false );
+-      mygrid[igrid]->run() = (iterat_.ncall2)*(iterat_.itmx2);
++      // Total PS points thrown in the grid-filling pass. 6.8 used the second
++      // (NLO) VEGAS pass, ncall2*itmx2; 10.3 has no /iterat/, so use the
++      // current pass counts from the VEGAS commons. run() normalises the
++      // stored weights, so a wrong value here rescales the whole grid by a
++      // constant -- the 6.8-vs-10.3 LO comparison is what verifies it.
++      mygrid[igrid]->run() = gridnorm_.totcall;
+       
+       mygrid[igrid]->untrim();
+       int untrim_size = mygrid[igrid]->size();
