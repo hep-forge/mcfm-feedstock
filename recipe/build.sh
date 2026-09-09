@@ -236,9 +236,20 @@ case "$MCFM_VER" in
 
     if [ "$WITH_APPLGRID" = "ON" ]; then
         # Same bridge tarball and the same two conf-driven patches the 6.x
-        # branch uses, plus the 10.x-specific one. Verified: all three apply to
-        # 0.0.53 with --fuzz=0, and MCFM 10.3 linked against the result gives
-        # the same grid as the 0.0.35-based build used for validation.
+        # branch uses, plus the 10.x-specific one.
+        #
+        # Verified against 0.0.53: all three patches apply with --fuzz=0, the
+        # bridge builds and imports gridnorm_ (not the 6.8-era iterat_), and
+        # MCFM 10.3 links against it with 17 appl::grid symbols -- the same
+        # count as the 0.0.35-based build.
+        #
+        # NOT yet verified: that a grid produced with the 0.0.53 bridge is
+        # numerically identical to the 0.0.35 one used for the LO/NLO
+        # validation in patches/applgrid-mcfm103.md. Both give the same cross
+        # section (10.6762 vs 10.6761 pb on E615 slice 0), but the 0.0.53
+        # fill pass runs markedly slower, which is unexplained. Treat the
+        # validation numbers as established for 0.0.35 and re-check a grid
+        # from a 10.3-applgrid package before relying on it for a fit.
         curl -sL "https://applgrid.hepforge.org/downloads/?f=mcfm-bridge-0.0.53.tgz" -o mcfm-bridge.tgz
         mkdir -p mcfm-bridge
         tar xzf mcfm-bridge.tgz -C mcfm-bridge --strip-components=1
