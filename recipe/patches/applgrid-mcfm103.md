@@ -29,7 +29,11 @@ The bridge is mcfm-bridge **0.0.53**, the same tarball the 6.x branch fetches,
 with the same two conf-driven patches plus `applgrid-bridge-mcfm103.patch`. All
 three were verified to apply to 0.0.53 with `--fuzz=0`, and MCFM 10.3 linked
 against that bridge produces the same grid as the 0.0.35-based build used for
-the validation numbers above (17 `appl::grid` symbols either way).
+the validation numbers above: 17 `appl::grid` symbols either way, and an LO grid
+convoluting to ratio 1.00138 / worst bin 1.18% against MCFM 6.8 -- identical to
+every digit. The 0.0.53 fill pass is markedly slower for the same output
+(minutes vs ~30 s for E615 slice 0 at LO); unexplained, but it does not change
+the numbers.
 
 **The bridge is built with four explicit make targets, not a plain `make`.**
 `src/Makefile.am` evaluates `LHAPDFPATH = $(shell lhapdf-config --pdfsets-path)`,
