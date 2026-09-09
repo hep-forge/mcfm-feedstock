@@ -1,0 +1,279 @@
+--- a/src/mcfm_interface.cxx	2014-09-07 17:00:06
++++ b/src/mcfm_interface.cxx	2026-09-08 15:47:23
+@@ -8,14 +8,18 @@
+ //   $Id: mcfm_interfce.cxx, v   Fri  8 Nov 2013 09:07:01 CET sutt
+ 
+ 
++#include <cmath>
+ #include <iostream>
+ #include <sstream>
+ #include <iomanip>
+ #include <string>
+ #include <sys/stat.h>
+ 
+-#include <cstdlib> 
+-#include <sys/time.h> 
++#include <cstdlib>
++#include <cstdio>
++#include <cstring>
++#include <vector>
++#include <sys/time.h>
+ 
+ 
+ #include "TFile.h"
+@@ -113,6 +117,21 @@
+ long unsigned int runs  =  0;
+ bool isBooked           =  false;
+ std::string glabel      =  "";
++
++/// conf-driven single-grid modes (set in book_grid from appl_conf)
++static bool   conf_xF_mode = false;  // dsigma/dxF (DY dilepton pair, or photon for nproc 280-286)
++static bool   conf_pT_mode = false;  // dsigma/dpT (particle 3)
++static double conf_ptlo = 0, conf_pthi = 0;  // photon pT slice window (0 = no cut)
++static double conf_last_pt3 = 0;             // pT of particle 3, set per event for cuts()
++
++/// Observable definition, conf key `obsparticle` (0 = auto, the historic
++/// nproc-based choice). Any other value is read as a digit string naming the
++/// final-state particles to sum before taking xF, e.g. 3 -> p3, 34 -> p3+p4,
++/// 345 -> p3+p4+p5. This is what lets a new process pick its own observable
++/// without touching this file.
++static int    conf_obspart = 0;
++/// pT-window cut particle, conf key `cutparticle` (default 3).
++static int    conf_cutpart = 3;
+ 
+ void getObservable( const double evt[][mxpart] );
+ 
+@@ -352,13 +371,159 @@
+ 	  glabel+="-CCbar";
+ 	}
+     }  
+-  else                           
+-    { 
+-      std::cerr << "don't know which process" << std::endl; 
+-      std::exit(-1); 
+-    } 
++  else
++    {
++      std::cerr << "don't know which process" << std::endl;
++      std::exit(-1);
++    }
+   std::cout << std::endl;
++
++  /// -- E615 fixed-target Drell-Yan mode (enable: export appl_e615=1) ------
++  /// One grid, dsigma/dxF for a single sqrt(tau) slice. Binning matches
++  /// xfitter-datafiles fixedTarget/DY/E615 thexp-0 (12 xF bins, sqrt(tau)
++  /// in 0.185..0.208 -> Q2 window of the dimuon mass cuts in input.DAT).
++  static const double _e615xf[13] = { -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4,
++                                       0.5,  0.6, 0.7, 0.8, 0.9, 1.0 };
++  if ( std::getenv("appl_e615") ) {
++      Ngrids       = 1;
++      gridFiles[0] = "_xf.root";
++      nObsBins[0]  = 12;
++      obsBins[0]   = _e615xf;
++      pdf_function = "basic";   // full 121-subprocess identity decomposition (lossless)
++      q2Low   = 16.0;     // (4.00 GeV)^2 ..
++      q2Up    = 20.8;     // .. (4.56 GeV)^2
++      nQ2bins = 6;
++      qorder  = 3;
++      xLow    = 0.01;
++      xUp     = 1.0;
++      nXbins  = 250;      // dense x grid, low order: robust near the x->1 edge
++      xorder  = 2;
++      glabel  = "grid-e615";
++      const char* bn = std::getenv("appl_basename");
++      if ( bn && std::string(bn)!="" ) glabel = bn;
++      std::cout << " E615 pi-N Drell-Yan xF mode" << std::endl;
++  }
+ 
++  /// -- Conf-driven fixed-target mode (enable: export appl_conf=bridge.conf) --
++  /// Arbitrary bin edges / Q2 window / basename from a conf file written by
++  /// tools/parse-thexp.py --bridge-conf.  observable xF -> Drell-Yan
++  /// dsigma/dxF (generalises appl_e615);
++  /// observable pT -> prompt-photon dsigma/dpT (needs nproc 280-286).
++  static std::vector<double> _conf_edges;
++  const char* conf_path = std::getenv("appl_conf");
++  if ( conf_path && std::string(conf_path) != "" ) {
++      FILE* fp = fopen(conf_path, "r");
++      if (!fp) {
++          std::cerr << "appl_conf: cannot open " << conf_path << std::endl;
++          std::exit(1);
++      }
++      char key[64], val[512];
++      int    conf_nbins = 0;
++      double conf_q2lo = 0, conf_q2hi = 0;
++      int    conf_nxbins = 250, conf_nq2bins = 6;
++      int    conf_xorder = 2,   conf_qorder  = 3;
++      std::string conf_obs = "xF", conf_basename = "";
++      std::string conf_genpdf = "", conf_gridsuffix = "";
++      _conf_edges.clear();
++
++      while (fscanf(fp, " %63s", key) == 1) {
++          if (key[0] == '#') { if (!fgets(val, sizeof(val), fp)) break; continue; }
++          if      (strcmp(key, "observable") == 0) { fscanf(fp, " %511s", val); conf_obs = val; }
++          else if (strcmp(key, "nbins") == 0)    { fscanf(fp, " %d",  &conf_nbins);   }
++          else if (strcmp(key, "q2lo") == 0)     { fscanf(fp, " %lf", &conf_q2lo);    }
++          else if (strcmp(key, "q2hi") == 0)     { fscanf(fp, " %lf", &conf_q2hi);    }
++          else if (strcmp(key, "nxbins") == 0)   { fscanf(fp, " %d",  &conf_nxbins);  }
++          else if (strcmp(key, "xorder") == 0)   { fscanf(fp, " %d",  &conf_xorder);  }
++          else if (strcmp(key, "nq2bins") == 0)  { fscanf(fp, " %d",  &conf_nq2bins); }
++          else if (strcmp(key, "qorder") == 0)   { fscanf(fp, " %d",  &conf_qorder);  }
++          else if (strcmp(key, "basename") == 0) { fscanf(fp, " %511s", val); conf_basename = val; }
++          else if (strcmp(key, "ptlo") == 0)     { fscanf(fp, " %lf", &conf_ptlo); }
++          else if (strcmp(key, "pthi") == 0)     { fscanf(fp, " %lf", &conf_pthi); }
++          else if (strcmp(key, "xlow") == 0)     { fscanf(fp, " %lf", &xLow); }
++          else if (strcmp(key, "xup") == 0)      { fscanf(fp, " %lf", &xUp);  }
++          // --- flexibility keys: none of these have a hardcoded process assumption
++          else if (strcmp(key, "genpdf") == 0)     { fscanf(fp, " %511s", val); conf_genpdf = val; }
++          else if (strcmp(key, "gridsuffix") == 0) { fscanf(fp, " %511s", val); conf_gridsuffix = val; }
++          else if (strcmp(key, "obsparticle") == 0){ fscanf(fp, " %d", &conf_obspart); }
++          else if (strcmp(key, "cutparticle") == 0){ fscanf(fp, " %d", &conf_cutpart); }
++          else if (strcmp(key, "edges") == 0) {
++              for (int ie = 0; ie <= conf_nbins; ie++) {
++                  double e;
++                  if (fscanf(fp, " %lf", &e) != 1) break;
++                  _conf_edges.push_back(e);
++              }
++          }
++          else { if (!fgets(val, sizeof(val), fp)) break; } // skip unknown keys
++      }
++      fclose(fp);
++
++      if (conf_nbins == 0 || (int)_conf_edges.size() != conf_nbins + 1) {
++          std::cerr << "appl_conf: bad edges in " << conf_path
++                    << " (nbins=" << conf_nbins
++                    << " edges=" << _conf_edges.size() << ")" << std::endl;
++          std::exit(1);
++      }
++
++      Ngrids      = 1;
++      nObsBins[0] = conf_nbins;
++      obsBins[0]  = _conf_edges.data();
++      q2Low   = conf_q2lo;
++      q2Up    = conf_q2hi;
++      nQ2bins = conf_nq2bins;
++      qorder  = conf_qorder;
++      nXbins  = conf_nxbins;
++      xorder  = conf_xorder;
++      xLow    = (xLow > 1e-8) ? xLow : 0.01;
++      xUp     = (xUp  > 0.1)  ? xUp  : 1.0;
++
++      // Full 121-subprocess identity decomposition (lossless) for every
++      // conf-driven process, photon (nproc 280-286) included -- confirmed by
++      // reading back the PUBLISHED WA70 reference grid's own metadata
++      // (applgrid-draw --info grid-WA70-0.root -> "genpdf: basic.config"),
++      // matching E615's own working NLO grid (genpdf: basic.config) exactly.
++      // photonLO.config/photonNLO.config was the wrong config for this path
++      // (never what produced the published grids -- their group-averaged
++      // channels needed a *different* stored-weight convention than "basic"
++      // provides, which is why routing through them left grids either empty
++      // or off by ~1e3-1e4 depending on the factor applied; see git history
++      // on this line for that investigation).
++      // Channel decomposition. "basic" (full 121-subprocess identity, lossless)
++      // is the default because it is what the published grids use, but any
++      // MCFM/APPLgrid genpdf config can be selected from the conf file so a new
++      // process is never blocked by this line.
++      pdf_function = conf_genpdf.empty() ? "basic" : conf_genpdf;
++
++      static std::string _conf_gridfile;
++      if ( conf_obs == "pT" ) {
++          _conf_gridfile = "_pt.root";
++          conf_pT_mode = true;
++      } else {
++          _conf_gridfile = "_xf.root";
++          conf_xF_mode = true;
++      }
++      // Explicit override wins, so an observable this bridge does not name
++      // still gets a sensible output filename.
++      if ( !conf_gridsuffix.empty() ) {
++          _conf_gridfile = conf_gridsuffix;
++          if ( _conf_gridfile.size() < 5 ||
++               _conf_gridfile.compare(_conf_gridfile.size()-5, 5, ".root") != 0 )
++              _conf_gridfile += ".root";
++      }
++      gridFiles[0] = _conf_gridfile.c_str();
++
++      glabel = conf_basename.empty() ? "grid-bridge" : conf_basename;
++      const char* conf_bn = std::getenv("appl_basename");
++      if ( conf_bn && std::string(conf_bn) != "" ) glabel = conf_bn;
++
++      std::cout << " conf-driven " << conf_obs << " mode from " << conf_path
++                << "  nbins=" << conf_nbins
++                << "  Q2=[" << q2Low << "," << q2Up << "]"
++                << "  edges=[";
++      for (int ie = 0; ie <= conf_nbins; ie++)
++          std::cout << _conf_edges[ie] << (ie < conf_nbins ? "," : "");
++      std::cout << "]" << std::endl;
++  }
++
+   /// Read the ckm matrix from mcfm to store in the grid automatically
+   /// NB: we store 13 x 13 ckm matrix - mcfm only stores 11 x 11 so we 
+   ///     must add 1 to each index to keep them aligned
+@@ -474,7 +639,7 @@
+ //
+ // just normalise to bin width
+ //
+-void Normalise(TH1D* h) 
++void Normalise(appl::TH1D* h)   // appl::TH1D: conda applgrid 1.6.35 is a ROOT-free build
+ { 
+   for ( int ibin=1 ; ibin<=h->GetNbinsX() ; ibin++ ) 
+     { 
+@@ -676,11 +841,59 @@
+   Observable[ 3 ] = pt4;
+   Observable[ 4 ] = rapidity5;
+   Observable[ 5 ] = pt5;
++
++  /// E615 mode: xF of the dilepton pair (p3+p4), xF = 2 pz(34)/sqrt(s)
++  if ( std::getenv("appl_e615") ) {
++    Observable[0] = 2.0*(p3[3]+p4[3])/energy_.sqrts;
++  }
++
++  /// conf xF mode: xF = 2 pz / sqrt(s) of a configurable set of final-state
++  /// particles. `obsparticle` in the conf file names them as a digit string
++  /// (3 -> p3, 34 -> p3+p4, 345 -> p3+p4+p5). With obsparticle unset (0) we
++  /// keep the historic behaviour exactly: photon xF for prompt photon
++  /// (nproc 280-286), dilepton-pair xF otherwise.
++  if ( conf_xF_mode ) {
++    const double* pv[6] = { p3, p4, p5, p6, p7, p8 };
++    int sel = conf_obspart;
++    if ( sel == 0 )
++      sel = ( nproc_.nproc >= 280 && nproc_.nproc <= 286 ) ? 3 : 34;
++    double pz = 0.0;
++    for ( int d = sel; d > 0; d /= 10 ) {
++      const int idx = (d % 10) - 3;          // particle 3 is index 0
++      if ( idx >= 0 && idx < 6 ) pz += pv[idx][3];
++    }
++    Observable[0] = 2.0*pz/energy_.sqrts;
++  }
+ 
++  /// conf pT mode: transverse momentum of particle 3
++  if ( conf_pT_mode ) {
++    Observable[0] = pt3;
++  }
++
++  /// pT used by the window cut in cuts(); `cutparticle` selects which particle
++  /// (default 3, the historic photon choice).
++  {
++    const double* pc[6] = { p3, p4, p5, p6, p7, p8 };
++    const int ci = conf_cutpart - 3;
++    if ( ci > 0 && ci < 6 )
++      conf_last_pt3 = std::sqrt(pc[ci][1]*pc[ci][1] + pc[ci][2]*pc[ci][2]);
++    else
++      conf_last_pt3 = pt3;
++  }
++
+ }
+ 
+ int cuts(int igrid)
+ {
++  // conf-driven modes book a single grid; the only cut is the optional
++  // pT slice window (ptlo/pthi in bridge.conf, used for prompt photon
++  // where the run card cannot bound the photon pT from above)
++  if ( conf_xF_mode || conf_pT_mode ) {
++    if ( conf_pthi > 0 &&
++         (conf_last_pt3 < conf_ptlo || conf_last_pt3 >= conf_pthi) ) return 0;
++    return 1;
++  }
++
+   int fill = 0;
+   switch(igrid)
+     {
