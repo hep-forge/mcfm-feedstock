@@ -137,9 +137,20 @@ case "$MCFM_VER" in
     # carries a `-u <setup_mcfmbridge>` force-link; if that ever stops taking
     # effect the build still succeeds and quietly produces a binary with no
     # APPLgrid in it. Fail instead of shipping that.
-    NSYM=$(nm -C Bin/mcfm 2>/dev/null | grep -c "appl::grid" || true)
-    echo "appl::grid symbols in Bin/mcfm: ${NSYM}"
-    if [ "${NSYM:-0}" -eq 0 ]; then
+    # Use the host binutils name if plain `nm` is absent -- conda-build ships
+    # ${HOST}-nm and plain nm is not guaranteed on PATH. If NEITHER exists,
+    # warn and skip: a missing tool must not fail a build that is otherwise
+    # fine. (An earlier revision exited 1 in that case, which turned a green
+    # 6.8 red.)
+    NM=$(command -v nm || command -v "${HOST}-nm" || command -v "${BUILD}-nm" || true)
+    if [ -z "$NM" ]; then
+        echo "WARNING: no nm found; skipping the appl::grid verification."
+        NSYM=skip
+    else
+        NSYM=$("$NM" -C Bin/mcfm 2>/dev/null | grep -c "appl::grid" || true)
+        echo "appl::grid symbols in Bin/mcfm: ${NSYM} (via $NM)"
+    fi
+    if [ "${NSYM}" != "skip" ] && [ "${NSYM:-0}" -eq 0 ]; then
         echo "ERROR: 6.x builds link the APPLgrid bridge, but the binary" >&2
         echo "       contains no appl::grid symbols -- the force-link did not" >&2
         echo "       take. Refusing to publish a bridge-less mcfm." >&2
@@ -298,9 +309,15 @@ case "$MCFM_VER" in
         # A bridge that failed to force-link produces a binary with NO APPLgrid
         # in it and still exits 0 -- see patches/applgrid-mcfm103.md. Never let
         # that ship under a name promising APPLgrid support.
-        NSYM=$(nm -C mcfm 2>/dev/null | grep -c "appl::grid" || true)
-        echo "appl::grid symbols in mcfm: ${NSYM}"
-        if [ "${NSYM:-0}" -eq 0 ]; then
+        NM=$(command -v nm || command -v "${HOST}-nm" || command -v "${BUILD}-nm" || true)
+        if [ -z "$NM" ]; then
+            echo "WARNING: no nm found; skipping the appl::grid verification."
+            NSYM=skip
+        else
+            NSYM=$("$NM" -C mcfm 2>/dev/null | grep -c "appl::grid" || true)
+            echo "appl::grid symbols in mcfm: ${NSYM} (via $NM)"
+        fi
+        if [ "${NSYM}" != "skip" ] && [ "${NSYM:-0}" -eq 0 ]; then
             echo "ERROR: with_applgrid=ON but the binary contains no appl::grid symbols." >&2
             echo "       The bridge did not link; refusing to publish a package that" >&2
             echo "       advertises APPLgrid support without it." >&2
