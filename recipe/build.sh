@@ -103,11 +103,26 @@ case "$MCFM_VER" in
     patch -p1 -d mcfm-bridge < "${RECIPE_DIR}/patches/applgrid-bridge-conf-driven.patch"
     patch -p1 -d mcfm-bridge < "${RECIPE_DIR}/patches/applgrid-bridge-mcfm-grid.patch"
 
+    # Build ONLY the library and the config script, not the default `all`.
+    # mcfm-bridge's src/Makefile.am evaluates
+    #     LHAPDFPATH = $(shell lhapdf-config --pdfsets-path)
+    # and LHAPDF renamed that option to --datadir, so a plain `make` dies with
+    #     Error: Unknown option '--pdfsets-path'
+    # AFTER libmcfmbridge.a has already been archived. These four targets are
+    # everything MCFM needs and never touch that variable.
+    #
+    # This is why 6.8 went red: its last green build was 2026-07-04, and the
+    # option disappeared from the build image's LHAPDF at some point after
+    # that. Nothing in the recipe had to change for a working build to start
+    # failing. Reproduced locally against LHAPDF 6.5.1, where the same plain
+    # `make` fails identically and these targets succeed.
     (
       cd mcfm-bridge
       CC="${CC}" CXX="${CXX}" ./configure --prefix="${SRC_DIR}/mcfm-bridge-install"
-      make
-      make install
+      make -C src libmcfmbridge.a CXX="${CXX}"
+      make -C src install-libLIBRARIES CXX="${CXX}"
+      make -C bin mcfmbridge-config
+      make -C bin install-binSCRIPTS
     )
     export PATH="${SRC_DIR}/mcfm-bridge-install/bin:${PATH}"
 
