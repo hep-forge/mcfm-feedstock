@@ -31,6 +31,24 @@ case "$MCFM_VER" in
     tar xzf mcfm.tar.gz --strip-components=1
     rm mcfm.tar.gz
 
+    # gfortran >= 10 makes argument-count/type mismatches hard errors, and
+    # MCFM 6.8's bundled QCDLoop trips one immediately:
+    #   QCDLoop/ff/ffxd0p.f: Error: Actual argument contains too few elements
+    #   for dummy argument 'ipi12' (2/3)
+    # Every 6.8 makefile hardcodes FFLAGS (QCDLoop: `FFLAGS = -g`), so adding
+    # flags there is not enough -- wrap the compiler itself and hand the
+    # wrapper to each make as FC, which build.sh already does for all of
+    # them. Same flags as octofit's working local 6.8 build. (10.x does not
+    # need this: its CMake adds -fallow-argument-mismatch itself.)
+    # 6.8's last green recipe built from the HEPcodes GitHub mirror; this
+    # only surfaced after switching to the official mcfm.fnal.gov tarball.
+    cat > "${SRC_DIR}/fc-legacy" <<EOF
+#!/bin/bash
+exec "${FC}" -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -w "\$@"
+EOF
+    chmod +x "${SRC_DIR}/fc-legacy"
+    export FC="${SRC_DIR}/fc-legacy"
+
     # Small official refinement on top of the already-wired hooks above
     # (dynamic-scale handling + two more `case` variants in realint.f/
     # virtint.f) from hepforge's mcfm-patch-0.0.8 (applgrid.hepforge.org/
@@ -51,6 +69,14 @@ case "$MCFM_VER" in
     # write_grid_ -- a duplicate-symbol link error if both are compiled.
     # Upstream's own mcfm-patch cleanup.sh does the same removal.
     rm -f src/User/gridwrap.f
+
+    # The makefile lists gridwrap.o in USERFILES but its `%.o: %.cxx` pattern
+    # rule is commented out, so make has no way to build it:
+    #   make: *** No rule to make target 'gridwrap.o', needed by 'mcfm'.
+    # Compile the C++ shim by hand into obj/, where make finds it via VPATH --
+    # exactly what octofit's working local 6.8 build does.
+    mkdir -p obj
+    "${CXX}" -c -O2 -fPIC -o obj/gridwrap.o src/User/gridwrap.cxx
 
     # CPATH/LIBRARY_PATH get gfortran/gcc/ld to see $PREFIX's lhapdf
     # headers and library without touching the makefile's own FFLAGS/
