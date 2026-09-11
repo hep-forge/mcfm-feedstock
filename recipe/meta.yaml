@@ -113,7 +113,15 @@ test:
     # not exercise the APPLgrid bridge -- see build.sh/README for that.
     - test -x $PREFIX/bin/mcfm
     {% else %}
-    - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini"
+    # MCFM 10.x asks OpenMP for 8389760 bytes of thread stack -- just over the
+    # 8192 KB default soft limit -- and aborts before doing anything:
+    #   OMP: Error #29: Unable to set OMP thread stack size to 8389760 bytes
+    # That is what failed every 10.3 / 10.3-applgrid CI build AFTER a clean
+    # compile (conda-build runs this test inside Build Package). Raise the
+    # limit; fall back to the hard limit where a runner caps it, so the
+    # ulimit call itself cannot fail the test under set -e.
+    - ulimit -s unlimited || ulimit -s "$(ulimit -H -s)"
+    - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini (stack $(ulimit -s))"
     - cd $PREFIX/share/mcfm && mcfm
     {% endif %}
 
