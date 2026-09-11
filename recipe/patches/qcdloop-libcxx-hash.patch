@@ -1,0 +1,55 @@
+--- a/src/cache.cc	2026-09-11 14:25:22
++++ b/src/cache.cc	2026-09-11 14:25:22
+@@ -8,6 +8,18 @@
+ #include "qcdloop/cache.h"
+ 
+ 
++// libc++ (macOS) has no std::__hash_base / std::_Hash_impl, which are libstdc++
++// internals. These hashes only key the integral cache, so an FNV-1a hash of
++// the object bytes is an equivalent, portable replacement.
++template <typename T>
++inline std::size_t ql_bytes_hash(const T & v)
++{
++  const unsigned char * p = reinterpret_cast<const unsigned char *>(&v);
++  std::size_t h = 14695981039346656037ULL;
++  for (std::size_t i = 0; i < sizeof(T); ++i) { h ^= p[i]; h *= 1099511628211ULL; }
++  return h;
++}
++
+ namespace std {
+ 
+   template <typename T>
+@@ -18,27 +30,27 @@
+   }
+ 
+   template <>
+-  struct hash<ql::qdouble> : public __hash_base<size_t, ql::qdouble>
++  struct hash<ql::qdouble>
+   {
+     inline size_t operator()(const ql::qdouble & x) const noexcept
+     {
+-      return x != 0.0q ? std::_Hash_impl::hash(x) : 0;
++      return x != 0.0q ? ql_bytes_hash(x) : 0;
+     }
+   };
+ 
+-  template <> struct hash<ql::complex> : public __hash_base<size_t, ql::complex>
++  template <> struct hash<ql::complex>
+   {
+     inline size_t operator()(const ql::complex & x) const noexcept
+     {
+-      return x != ql::complex{0.0,0.0} ? std::_Hash_impl::hash(x) : 0;
++      return x != ql::complex{0.0,0.0} ? ql_bytes_hash(x) : 0;
+     }
+   };
+ 
+-  template <> struct hash<ql::qcomplex> : public __hash_base<size_t, ql::qcomplex>
++  template <> struct hash<ql::qcomplex>
+   {
+     inline size_t operator()(const ql::qcomplex & x) const noexcept
+     {
+-      return x != ql::qcomplex{0.0q,0.0q} ? std::_Hash_impl::hash(x) : 0;
++      return x != ql::qcomplex{0.0q,0.0q} ? ql_bytes_hash(x) : 0;
+     }
+   };
+ }

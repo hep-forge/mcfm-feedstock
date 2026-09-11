@@ -18,6 +18,14 @@ build:
   # with no lib/handyG at all, so it shares neither the build system nor the
   # patches used to enable 10.x on aarch64. Enabling it is separate work.
   skip: true  # [aarch64]
+{% elif version.startswith("6.") or "applgrid" in version %}
+build:
+  # 6.x and every -applgrid variant need applgrid, fastnlo and hoppet (and
+  # root 6.38), none of which exist for osx-arm64 on hep-forge or
+  # conda-forge. Until those feedstocks build for macOS these variants cannot
+  # solve there, so skip instead of producing a guaranteed-red macOS leg.
+  # Plain 10.x still builds on macOS.
+  skip: true  # [osx]
 {% endif %}
 
 # No source: url/git_url block at all -- mcfm.fnal.gov's WAF returns 403
@@ -59,9 +67,22 @@ requirements:
     - autoconf                     # mcfm-bridge's own build (6.x)
     - libtool                      # mcfm-bridge's own build (6.x)
     - perl
+    - gnuconfig                    # [osx]  fresh config.sub for qd (see build.sh)
     {% if not version.startswith("6.") %}
     - mpi
-    - mpich
+    # MCFM 10.x compiles `use mpi` (mod_CPUTime.f90, -Duse_mpi=ON), reading
+    # mpich's mpi.mod: a gfortran MODULE file, readable only by a gfortran
+    # writing the same module version. conda-forge mpich 5.0.1 build _4
+    # (2026-08-19) was compiled with gfortran 15 (module version 16); the
+    # Linux compiler is pinned to 14 (module version 15), so every 10.x Linux
+    # build died ~40 min in: "Cannot read module file '.../src/Inc/mpi.mod'
+    # ... created by a different version of GNU Fortran". _3 is the last build
+    # made with gfortran 14.4. build.sh checks the two versions match before
+    # compiling. Run stays unpinned: only the compile-time .mod is affected.
+    # macOS keeps the newest build (its GCC 16 reads module version 16).
+    # Pinned here and not in conda_build_config.yaml -- see the note there.
+    - mpich 5.0.1 *_3              # [linux]
+    - mpich                        # [osx]
     {% endif %}
 
   host:
@@ -87,7 +108,8 @@ requirements:
     {% endif %}
     {% if not version.startswith("6.") %}
     - mpi
-    - mpich
+    - mpich 5.0.1 *_3              # [linux]  same pin as build (see above)
+    - mpich                        # [osx]
     {% endif %}
 
   run:
@@ -121,6 +143,13 @@ test:
     # limit; fall back to the hard limit where a runner caps it, so the
     # ulimit call itself cannot fail the test under set -e.
     - ulimit -s unlimited || ulimit -s "$(ulimit -H -s)"
+    # ulimit sizes only the MAIN thread's stack. MCFM's OpenMP worker threads
+    # get OMP_STACKSIZE (libgomp's default is a few MB) and overflow it in the
+    # first integration: "Segmentation fault" right after the startup banner,
+    # with an 8 MB or an unlimited ulimit alike. Verified on linux-aarch64
+    # (16 threads): segfault without it; OMP_STACKSIZE=256M runs input.ini to
+    # completion (11.7524 nb), as does OMP_NUM_THREADS=1.
+    - export OMP_STACKSIZE=256M
     - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini (stack $(ulimit -s))"
     - cd $PREFIX/share/mcfm && mcfm
     {% endif %}

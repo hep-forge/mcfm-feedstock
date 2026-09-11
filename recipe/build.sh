@@ -216,7 +216,86 @@ EOF
     rm mcfm.tar.gz
 
     export LD=$FC # prevent using LD in handyG
+
+    # macOS only: qd's autoconf config.sub (2012) predates Apple Silicon and
+    # rejects the build triplet, failing the qd ExternalProject configure:
+    #   configure: error: /bin/sh config/config.sub arm64-apple-darwin20.0.0 failed
+    # Refresh it from conda-forge's gnuconfig. qd is the only autoconf project
+    # in the 10.x tree. Linux builds are untouched.
+    if [ "$(uname -s)" = "Darwin" ]; then
+        for d in lib/qd-*/config; do
+            cp "${BUILD_PREFIX}/share/gnuconfig/config.sub"   "$d/config.sub"
+            cp "${BUILD_PREFIX}/share/gnuconfig/config.guess" "$d/config.guess"
+        done
+        # MCFM links only the static qd archives (qd_lib_static, qdmod_lib_static)
+        # but configures qd with --enable-shared. macOS -dynamiclib requires
+        # every symbol at link time, so libqdmod.dylib -- Fortran objects linked
+        # by the C++ driver without -lgfortran -- fails:
+        #   "__gfortran_transfer_character_write", referenced from ...qdmodule...
+        # Build qd static-only on macOS; the shared library is never used.
+        perl -pi -e 's/(--enable-fma --prefix=\S+) --enable-shared/$1 --disable-shared/' CMakeLists.txt
+        # -F: the pattern contains ${...}, which BSD grep (macOS) reads as regex.
+        grep -qF -- '--enable-fma --prefix=${CMAKE_BINARY_DIR}/local --disable-shared' CMakeLists.txt \
+            || { echo "ERROR: could not switch qd to --disable-shared" >&2; exit 1; }
+        # qcdloop's cache.cc derives its std::hash specializations from
+        # libstdc++ internals (std::__hash_base, std::_Hash_impl) that libc++
+        # lacks, so GCC on macOS (which uses libc++) rejects it. The patch swaps
+        # in a portable byte hash; it is only a cache key.
+        patch -p1 -d lib/qcdloop-2.0.9 < "${RECIPE_DIR}/patches/qcdloop-libcxx-hash.patch"
+        # qcdloop finds libquadmath (QUADMATH_LIBRARY) but links nothing into
+        # libqcdloop.dylib, which macOS rejects at link time:
+        #   Undefined symbols for architecture arm64: "_cabsq", "_clogq", ...
+        # (MCFM itself links only libqcdloop.a; this just lets the dylib build.)
+        perl -pi -e 's/^target_link_libraries\(qcdloop_shared\)$/target_link_libraries(qcdloop_shared \${QUADMATH_LIBRARY})/' \
+            lib/qcdloop-2.0.9/CMakeLists.txt
+        grep -qF 'target_link_libraries(qcdloop_shared ${QUADMATH_LIBRARY})' lib/qcdloop-2.0.9/CMakeLists.txt \
+            || { echo "ERROR: could not link quadmath into qcdloop_shared" >&2; exit 1; }
+        # GCC on macOS compiles against conda-forge's libc++ headers, whose
+        # uninstantiated templates declare `static` locals in constexpr
+        # functions -- valid only from C++23, and a default error in GCC:
+        #   '__both_sized' defined 'static' in 'constexpr' function only
+        #   available with '-std=c++23' [-Wtemplate-body]
+        # MCFM's BLHA C++ files (<map>) trip it. -Wno-template-body skips
+        # checks on template bodies that are never instantiated.
+        export CXXFLAGS="${CXXFLAGS} -Wno-template-body"
+        # MCFM hardcodes `stdc++` in its link lines; macOS has only libc++:
+        #   ld: library not found for -lstdc++
+        # And it links MPI (${MPI_Fortran_LIBRARIES}) into the mcfm executable
+        # only, not into libmcfm, which a macOS dylib cannot leave unresolved:
+        #   Undefined symbols: "_mpi_allreduce_", "_mpi_bcast_", ...
+        # Add it to libmcfm's own link lines (empty when use_mpi is OFF). Not a
+        # separate target_link_libraries(libmcfm ...) next to mcfm's: libmcfm
+        # does not exist yet at that point in CMakeLists.txt.
+        perl -pi -e 's/^(\s*target_link_libraries\(libmcfm .* quadmath) stdc\+\+/$1 c++ \${MPI_Fortran_LIBRARIES}/' CMakeLists.txt
+        perl -pi -e 's/ quadmath stdc\+\+/ quadmath c++/g' CMakeLists.txt
+        ! grep -qF -- 'quadmath stdc++' CMakeLists.txt \
+            || { echo "ERROR: could not switch MCFM's link lines to libc++" >&2; exit 1; }
+        [ "$(grep -cF -- 'quadmath c++ ${MPI_Fortran_LIBRARIES}' CMakeLists.txt)" = 2 ] \
+            || { echo "ERROR: could not add MPI to both libmcfm link lines" >&2; exit 1; }
+    fi
     ln -s $BUILD_PREFIX/include/* ./src/Inc/
+
+    # mpi.mod is a gfortran module file, readable only by a gfortran writing
+    # the same module version (see the mpich pin in conda_build_config.yaml).
+    # Check it here, so a mismatch fails in seconds with a clear message
+    # instead of ~40 min later at `use mpi` in mod_CPUTime.f90. Decompress
+    # to files, not a pipe: `| head` could SIGPIPE gzip under set -e.
+    if [ -f "${BUILD_PREFIX}/include/mpi.mod" ]; then
+        modchk="${SRC_DIR}/modchk"; mkdir -p "$modchk"
+        printf 'module mcfm_modchk\nend module mcfm_modchk\n' > "$modchk/t.f90"
+        ( cd "$modchk" && "${FC}" -c t.f90 -o t.o )
+        gzip -dc "$modchk/mcfm_modchk.mod"         > "$modchk/fc.txt"
+        gzip -dc "${BUILD_PREFIX}/include/mpi.mod" > "$modchk/mpi.txt"
+        fc_modv=$(sed -n "1s/.*module version '\([0-9]*\)'.*/\1/p" "$modchk/fc.txt")
+        mpi_modv=$(sed -n "1s/.*module version '\([0-9]*\)'.*/\1/p" "$modchk/mpi.txt")
+        echo "gfortran module version: FC=${fc_modv} mpi.mod=${mpi_modv}"
+        if [ "${fc_modv}" != "${mpi_modv}" ]; then
+            echo "ERROR: mpich's mpi.mod (module version ${mpi_modv}) cannot be read by" >&2
+            echo "       ${FC} (module version ${fc_modv}). Pin an mpich build made with" >&2
+            echo "       the same gfortran major (conda_build_config.yaml)." >&2
+            exit 1
+        fi
+    fi
 
     # handyG's configure emits link rules for auxiliary binaries (geval,
     # handyG, test) that fail in this toolchain. It ALSO makes `install`
@@ -246,7 +325,14 @@ EOF
     patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-mcfm103-hplog.patch"
     patch -p1 --fuzz=0 < "${RECIPE_DIR}/patches/applgrid-mcfm103-cmake.patch"
 
-    if [ "$(uname -m)" != "x86_64" ]; then
+    # The quadmath shim is for LINUX aarch64 only, where long double IS IEEE
+    # binary128. macOS arm64 also reports `uname -m` = arm64, but there long
+    # double is plain 64-bit double (LDBL_MANT_DIG 53), so the shim would
+    # #error -- and it is not needed: the GCC toolchain conda uses on macOS
+    # supports __float128, and conda-forge's osx-arm64 libgcc ships
+    # libquadmath.dylib. macOS therefore takes the same path as x86: real
+    # libquadmath, pristine -lquadmath link, no shim and no aarch64 patches.
+    if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" != "x86_64" ]; then
         # ---- aarch64 enablement -------------------------------------------
         # GCC builds libquadmath only where __float128 is a distinct type,
         # i.e. x86, whose long double is the 80-bit x87 format. On aarch64
@@ -335,11 +421,17 @@ EOF
         export PATH="${SRC_DIR}/mcfm-bridge-install/bin:${PATH}"
     fi
 
+    # lhapdf include path from --prefix, NOT --incdir. conda-forge's
+    # lhapdf-config (used on macOS, where hep-forge has no build) lists --incdir
+    # in its help but does not implement it: it prints the whole help text,
+    # which word-splits into cmake arguments and aborts configure with
+    #   Argument "|" to --help did not match any keywords.
+    # --prefix works for both hep-forge's and conda-forge's lhapdf.
     mkdir build
     cd build
 
     cmake .. -DCMAKE_INSTALL_PREFIX=${PREFIX} -Dwith_library=ON \
-            -Duse_internal_lhapdf=OFF -Dlhapdf_include_path=$(lhapdf-config --incdir) \
+            -Duse_internal_lhapdf=OFF -Dlhapdf_include_path="$(lhapdf-config --prefix)/include" \
             -Duse_mpi=ON -Duse_coarray=OFF \
             -Dwith_applgrid=${WITH_APPLGRID}
 
@@ -369,7 +461,8 @@ EOF
     mkdir -p $PREFIX/bin
     cp mcfm $PREFIX/bin
     mkdir -p $PREFIX/lib
-    cp libmcfm.so $PREFIX/lib
+    # .dylib on macOS, .so on Linux
+    cp libmcfm${SHLIB_EXT} $PREFIX/lib
     mkdir -p $PREFIX/share/mcfm/
     cp -Rf ../Bin/* $PREFIX/share/mcfm/
     mkdir -p $PREFIX/include

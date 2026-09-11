@@ -30,11 +30,30 @@ cxx_compiler:
 # NB this pins the *ABI*. It only fixes the C++ *dialect* as a side
 # effect (14 defaults to gnu++17); source that requires a particular
 # standard should set CMAKE_CXX_STANDARD explicitly as well.
+# NB the `# [linux]` selector must be on the ITEM lines as well as the keys
+# below. With it only on the key, macOS drops the key line but keeps the
+# orphaned `- 14` / `- 14.*` item, which then attaches to the previous key --
+# cxx_compiler became [gxx, 14, 14, 14.*, 14.*] and conda-build tried to
+# install a compiler package named `14_osx-arm64`.
 c_compiler_version:    # [linux]
-  - 14
+  - 14                 # [linux]
 cxx_compiler_version:  # [linux]
-  - 14
+  - 14                 # [linux]
 libgcc_version:        # [linux]
-  - 14.*
+  - 14.*               # [linux]
 libstdcxx_version:     # [linux]
-  - 14.*
+  - 14.*               # [linux]
+# ---- perl (macOS)
+# perl is an unpinned build requirement, so conda-build falls back to its own
+# built-in default, perl 5.26.2 -- which conda-forge has for Linux but never
+# built for osx-arm64. The macOS solve then fails before anything compiles:
+#   Unsatisfiable dependencies for platform osx-arm64: perl=5.26.2
+# Pin a version conda-forge ships for osx-arm64. macOS-only on purpose, so the
+# Linux build environments stay exactly as validated. The selector is on
+# BOTH lines: selector-on-item-only leaves an empty `perl:` key on Linux.
+perl:      # [osx]
+  - 5.32.1  # [osx]
+# NB mpich is pinned in meta.yaml, NOT here: a key in this file counts as a
+# "used variable" whenever its name appears anywhere in meta.yaml -- even in
+# the 10.x-only jinja branch -- so an mpich key here moved the 6.x build
+# hashes (published h3720f44 -> hbcbd160) without changing their content.
