@@ -66,26 +66,38 @@ requirements:
 
   host:
     - lhapdf
-    {% if version.startswith("6.") %}
-    # APPLgrid bridge (mcfm-bridge/mcfm-patch from applgrid.hepforge.org)
-    # links mcfm_interface.cxx/mcfm_grid.cxx into the mcfm binary -- see
-    # build.sh. root634 pin just picks one applgrid build out of its own
-    # root-version matrix; not otherwise significant.
-    - root 6.34.*
-    - applgrid * root634
+    {% if version.startswith("6.") or "applgrid" in version %}
+    # APPLgrid bridge (mcfm-bridge from applgrid.hepforge.org) links
+    # mcfm_interface.cxx/mcfm_grid.cxx into the mcfm binary -- see build.sh.
+    # Needed by every 6.x build (the bridge is always linked there) and by
+    # any <version>-applgrid tag, e.g. 10.3-applgrid. `version` is the tag
+    # with its hyphen intact, so "applgrid" in version catches the variant.
+    #
+    # The root pin is NOT cosmetic. It selects the whole applgrid -> fastnlo
+    # chain, and the root634 builds cannot coexist with hoppet 1.2.0:
+    #   fastnlo 2.6.0 root634 requires lhapdf >=6.5.5,<6.5.6
+    #   hoppet  1.2.0         requires lhapdf >=6.5.6,<6.5.7
+    # so with root634 the host environment is unsolvable (conda:
+    # "hoppet =1.2.0 requires lhapdf >=6.5.6,<6.5.7, which conflicts").
+    # fastnlo root638 takes lhapdf >=6.5.6,<7 and the set solves on both
+    # linux-64 and linux-aarch64.
+    - root 6.38.*
+    - applgrid * root638
     - hoppet ==1.2.0
-    {% else %}
+    {% endif %}
+    {% if not version.startswith("6.") %}
     - mpi
     - mpich
     {% endif %}
 
   run:
     - lhapdf
-    {% if version.startswith("6.") %}
-    - root 6.34.*
-    - applgrid * root634
+    {% if version.startswith("6.") or "applgrid" in version %}
+    - root 6.38.*
+    - applgrid * root638
     - hoppet ==1.2.0
-    {% else %}
+    {% endif %}
+    {% if not version.startswith("6.") %}
     - mpi
     - mpich
     {% endif %}
