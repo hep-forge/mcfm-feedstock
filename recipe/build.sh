@@ -250,14 +250,46 @@ EOF
             lib/qcdloop-2.0.9/CMakeLists.txt
         grep -qF 'target_link_libraries(qcdloop_shared ${QUADMATH_LIBRARY})' lib/qcdloop-2.0.9/CMakeLists.txt \
             || { echo "ERROR: could not link quadmath into qcdloop_shared" >&2; exit 1; }
-        # GCC on macOS compiles against conda-forge's libc++ headers, whose
-        # uninstantiated templates declare `static` locals in constexpr
-        # functions -- valid only from C++23, and a default error in GCC:
-        #   '__both_sized' defined 'static' in 'constexpr' function only
-        #   available with '-std=c++23' [-Wtemplate-body]
-        # MCFM's BLHA C++ files (<map>) trip it. -Wno-template-body skips
-        # checks on template bodies that are never instantiated.
-        export CXXFLAGS="${CXXFLAGS} -Wno-template-body"
+        # Compilers. MCFM's own C/C++ is built with CLANG: GCC 16 on darwin
+        # compiles against libc++ with a different std::string layout than
+        # the clang-built LHAPDF, so the PDF set name MCFM hands to
+        # LHAPDF::mkPDF arrives garbled -- the package test aborted with
+        #   LHAPDF::ReadError: Info file not found for PDF set ''
+        # (reproduced standalone: GCC-built caller -> garbage name, clang ->
+        # loads the set). GCC stays for Fortran and for qcdloop, which needs
+        # __float128 (clang on arm64 has none); qcdloop's C++ API never
+        # passes strings across to MCFM.
+        MCFM_CC="${BUILD_PREFIX}/bin/${HOST}-clang"
+        MCFM_CXX="${BUILD_PREFIX}/bin/${HOST}-clang++"
+        QL_CC="${BUILD_PREFIX}/bin/${HOST}-gcc"
+        QL_CXX="${BUILD_PREFIX}/bin/${HOST}-g++"
+        for c in "$MCFM_CC" "$MCFM_CXX" "$QL_CC" "$QL_CXX"; do
+            [ -x "$c" ] || { echo "ERROR: compiler $c not found" >&2; exit 1; }
+        done
+        export CC="$MCFM_CC" CXX="$MCFM_CXX"
+        # MCFM only knows GNU/Intel C/C++ (FATAL_ERROR otherwise). C: Clang
+        # takes the GNU branch (-fopenmp). C++: a Clang branch that adds
+        # -femulated-tls as well -- gfortran on darwin stores threadprivate
+        # COMMON blocks as GCC emulated TLS (___emutls_v.*), and MCFM's C++
+        # reads them (see mcfm-cxxwrapper-clang-tls.patch below).
+        perl -0pi -e 's/if \(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"\)\n/if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")\n    set(CMAKE_CXX_FLAGS "\${CMAKE_CXX_FLAGS} -fopenmp -femulated-tls")\nelseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")\n/' CMakeLists.txt
+        perl -pi -e 's/if \(CMAKE_C_COMPILER_ID STREQUAL "GNU"\)/if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")/' CMakeLists.txt
+        { grep -qF 'if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")' CMakeLists.txt \
+            && grep -qF -- '-fopenmp -femulated-tls' CMakeLists.txt \
+            && grep -qF 'if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")' CMakeLists.txt; } \
+            || { echo "ERROR: could not let MCFM accept Clang" >&2; exit 1; }
+        # The C++ side declares those COMMON blocks with `#pragma omp
+        # threadprivate`, which clang compiles as C++ thread_local and reaches
+        # through _ZTW wrapper routines nothing defines -- libmcfm.dylib failed
+        # to link ("thread-local wrapper routine for qcdcouple_"). Declare them
+        # __thread instead (no wrapper; with -femulated-tls, gfortran's storage).
+        patch -p1 < "${RECIPE_DIR}/patches/mcfm-cxxwrapper-clang-tls.patch"
+        # qcdloop inherits MCFM's C/C++ compilers; hand it GCC instead. The
+        # paths go in through %ENV: interpolated into s///, their slashes
+        # would end the regex.
+        QL_CXX="$QL_CXX" QL_CC="$QL_CC" perl -pi -e 's/(ENABLE_FORTRAN_WRAPPER=ON .*)-DCMAKE_CXX_COMPILER=\$\{CMAKE_CXX_COMPILER\} -DCMAKE_C_COMPILER=\$\{CMAKE_C_COMPILER\}/$1-DCMAKE_CXX_COMPILER=$ENV{QL_CXX} -DCMAKE_C_COMPILER=$ENV{QL_CC}/' CMakeLists.txt
+        grep -qF -- "-DCMAKE_CXX_COMPILER=${QL_CXX} -DCMAKE_C_COMPILER=${QL_CC}" CMakeLists.txt \
+            || { echo "ERROR: could not point qcdloop at GCC" >&2; exit 1; }
         # MCFM hardcodes `stdc++` in its link lines; macOS has only libc++:
         #   ld: library not found for -lstdc++
         # And it links MPI (${MPI_Fortran_LIBRARIES}) into the mcfm executable

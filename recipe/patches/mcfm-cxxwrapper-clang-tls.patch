@@ -1,0 +1,104 @@
+--- a/src/Inc/MCFM/CXX_Wrapper.h	2026-09-11 19:42:26
++++ b/src/Inc/MCFM/CXX_Wrapper.h	2026-09-11 19:42:26
+@@ -17,19 +17,19 @@
+   extern struct {
+     bool verbose;
+   } verbose_;
+-  extern struct {
++  extern __thread struct {
+     double epinv;
+   } epinv_;
+-  extern struct {
++  extern __thread struct {
+     double epinv2;
+   } epinv2_;
+-  extern struct {
++  extern __thread struct {
+     char scheme[4];
+   } scheme_;
+-  extern struct {
++  extern __thread struct {
+     double scale,musq;
+   } mcfmscale_;
+-  extern struct {
++  extern __thread struct {
+     double gsq,as,ason2pi,ason4pi;
+   } qcdcouple_;
+   extern struct {
+@@ -38,13 +38,13 @@
+   extern struct {
+     int ewscheme;
+   } ewscheme_;
+-  extern struct {
++  extern __thread struct {
+     double Gf,gw,xw,gwsq,esq,vevsq;
+   } ewcouple_;
+-  extern struct {
++  extern __thread struct {
+     int nflav;
+   } nflav_;
+-  extern struct {
++  extern __thread struct {
+     double md,mu,ms,mc,mb,mt,
+       mel,mmu,mtau,
+       hmass,hwidth,
+@@ -54,7 +54,7 @@
+       tauwidth,
+       mtausq,mcsq,mbsq;
+   } masses_;
+-  extern struct {
++  extern __thread struct {
+     int n2, n3;
+     double mass2, width2, mass3, width3;
+   } breit_;
+@@ -79,10 +79,10 @@
+   extern struct {
+     bool removebr;
+   } removebr_;
+-  extern struct {
++  extern __thread struct {
+     bool zerowidth;
+   } zerowidth_;
+-  extern struct {
++  extern __thread struct {
+     int qflag,gflag,qandgflag;
+   } flags_;
+   extern struct {
+@@ -95,7 +95,7 @@
+     struct {double r,i;} zaemmz,zesq,rq1,rq2,
+       zxw,zl,zr,zle,zln,zre,zrn,zsin2w,zl1,zr1,zl2,zr2;
+   } zcouple_cms_;
+-  extern struct{
++  extern __thread struct {
+     double s[MCFM_NMX*MCFM_NMX];
+   } sprods_;
+   extern struct{
+@@ -104,10 +104,10 @@
+   extern struct {
+     char codeversion[6];
+   } versionnumber_;
+-  extern struct {
++  extern __thread struct {
+     bool interference,bw34_56;
+   } interference_;
+-  extern struct {
++  extern __thread struct {
+     double vsymfact;
+   } vsymfact_;
+   extern struct {
+@@ -117,10 +117,11 @@
+     int scalarselect;
+   } scalarselect_;
+ 
+-#pragma omp threadprivate \
+-  (nflav_, masses_, breit_, epinv_, epinv2_,   \
+-   scheme_, mcfmscale_, qcdcouple_, ewcouple_, \
+-   zerowidth_, flags_, sprods_, interference_, vsymfact_)
++  // The threadprivate COMMON blocks above are declared __thread instead of
++  // `#pragma omp threadprivate`: clang treats a pragma-threadprivate C++
++  // variable like thread_local and calls _ZTW wrapper routines that nothing
++  // defines (gfortran owns the storage). Build with -femulated-tls so clang
++  // uses the same ___emutls_v.* storage as gfortran on darwin.
+ 
+   inline int mp(const int id, const int i) {return i*MCFM_NMX+id;}
+ 

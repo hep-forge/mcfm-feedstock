@@ -68,6 +68,13 @@ requirements:
     - libtool                      # mcfm-bridge's own build (6.x)
     - perl
     - gnuconfig                    # [osx]  fresh config.sub for qd (see build.sh)
+    # macOS: MCFM's C/C++ must be built by clang. GCC 16 on darwin compiles
+    # against libc++ with a different std::string layout than the clang-built
+    # LHAPDF, so every name MCFM passes arrives garbled -- the package test
+    # aborted with "Info file not found for PDF set ''". GCC (from the
+    # gfortran/cxx compilers above) stays for Fortran and for qcdloop, which
+    # needs __float128. build.sh picks each compiler explicitly.
+    - clangxx_osx-arm64            # [osx]
     {% if not version.startswith("6.") %}
     - mpi
     # MCFM 10.x compiles `use mpi` (mod_CPUTime.f90, -Duse_mpi=ON), reading
@@ -87,6 +94,7 @@ requirements:
 
   host:
     - lhapdf
+    - llvm-openmp                  # [osx]  omp.h for clang's -fopenmp (MCFM's C++)
     {% if version.startswith("6.") or "applgrid" in version %}
     # APPLgrid bridge (mcfm-bridge from applgrid.hepforge.org) links
     # mcfm_interface.cxx/mcfm_grid.cxx into the mcfm binary -- see build.sh.
@@ -136,12 +144,12 @@ test:
     - test -x $PREFIX/bin/mcfm
     {% else %}
     # MCFM 10.x asks OpenMP for 8389760 bytes of thread stack -- just over the
-    # 8192 KB default soft limit -- and aborts before doing anything:
+    # 8192 KB default soft limit -- and can abort before doing anything:
     #   OMP: Error #29: Unable to set OMP thread stack size to 8389760 bytes
-    # That is what failed every 10.3 / 10.3-applgrid CI build AFTER a clean
-    # compile (conda-build runs this test inside Build Package). Raise the
-    # limit; fall back to the hard limit where a runner caps it, so the
-    # ulimit call itself cannot fail the test under set -e.
+    # (Reproduced locally. NOT what failed 10.x CI through 4ec884d: those
+    # builds never got this far -- see the mpich pin above.) Raise the limit;
+    # fall back to the hard limit where a runner caps it (macOS: 65520 KB),
+    # so the ulimit call itself cannot fail the test under set -e.
     - ulimit -s unlimited || ulimit -s "$(ulimit -H -s)"
     # ulimit sizes only the MAIN thread's stack. MCFM's OpenMP worker threads
     # get OMP_STACKSIZE (libgomp's default is a few MB) and overflow it in the
@@ -164,5 +172,9 @@ about:
 extra:
   recipe-maintainers:
     - meiyasan
+  # autoupload.yml's Trim step keeps only the newest TRIM_KEEP=2 versions per
+  # label plus these. With four release lines, 2 is not enough: publishing
+  # 10.3 and 10.3.applgrid on 2026-09-11 deleted 6.8.applgrid. Protect every
+  # line explicitly (a future 10.4 must not evict them either).
   lts:
-    main: ["6.8"]
+    main: ["6.8", "6.8.applgrid", "10.3", "10.3.applgrid"]
