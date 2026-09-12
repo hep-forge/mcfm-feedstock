@@ -15,8 +15,8 @@ MCFM is a parton-level Monte Carlo program
 
 | Architecture | Latest published |
 |--------------|------------------|
-| linux-amd64 (`linux-64`) | ✅ `10.3` |
-| linux-arm64 (`linux-aarch64`) | ❌ not published |
+| linux-amd64 (`linux-64`) | ✅ `10.3.applgrid` |
+| linux-arm64 (`linux-aarch64`) | ✅ `10.3.applgrid` |
 
 _As of the last feedstock render; the badges above are live._
 
