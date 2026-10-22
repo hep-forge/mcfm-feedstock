@@ -32,7 +32,8 @@ permissions:
 jobs:
   command:
     if: >
-      !github.event.issue.pull_request && (
+      !github.event.issue.pull_request &&
+      !contains(github.event_name == 'issues' && github.event.issue.body || github.event.comment.body, '<!-- hep-bot:') && (
         contains(github.event_name == 'issues' && github.event.issue.body || github.event.comment.body, '@hep-bot') ||
         (github.event_name == 'issues' && (
           startsWith(github.event.issue.title, '[rerender]') ||
