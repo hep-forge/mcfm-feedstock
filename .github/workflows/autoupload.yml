@@ -33,7 +33,11 @@ name: Anaconda Build & Upload
 on:
   push:
     tags:
-      - '[0-9]*'         # only version-like tags (e.g. 3.5.1, 1.056)
+      - '[0-9]*'         # version-like tags (e.g. 3.5.1, 1.056)
+      - 'head'           # upstream main/master: the recipe resolves the
+                         # unknown version "head" to git_rev HEAD (or its
+                         # own branch archive) and publishes version "head",
+                         # which conda ranks below every numeric release
   workflow_dispatch:     # manual builds: only run if the ref picked in the
                          # UI/API is itself a tag (see the env job's `if:`)
     inputs:
@@ -452,6 +456,8 @@ jobs:
 
           # "keep" is a standalone overlay flag, not a release line.
           protect = {v for v in versions if "keep" in labels_of[v]}
+          # The rolling upstream-main build, one per label, is never trimmed.
+          protect |= {v for v in versions if v == "head"}
 
           # Every other label is a branch/release line, trimmed on its own:
           # only numeric versions (or this recipe's own release_tags)
