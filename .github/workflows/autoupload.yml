@@ -428,6 +428,7 @@ jobs:
               except OSError:
                   return {}
               text = re.sub(r"\{%.*?%\}", "", text, flags=re.DOTALL)
+              text = re.sub(r"\{#.*?#\}", "", text, flags=re.DOTALL)  # Jinja comments
               text = re.sub(r"\{\{.*?\}\}", "JINJA_VALUE", text)
               meta = yaml.safe_load(text) or {}
               raw = (meta.get("extra", {}) or {}).get(key, {}) or {}
