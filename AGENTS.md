@@ -61,6 +61,8 @@ conda-forge CI files that hep-forge doesn't use.
   `git add -f`. Otherwise they are silently left out of the commit.
 - The channel keeps only the newest 2 versions per label. Older versions that
   must stay go in `extra.lts`.
+- A GitHub release only hosts a file the recipe downloads (e.g. a tarball mirror). Its
+  title is the tag, with no notes: `gh release create <tag> <file> --title <tag> --notes ""`.
 - Rebuilding an existing tag: `@hep-bot rerun <tag>` rebuilds the recipe *as of
   that tag*. To ship a recipe fix under the same version, move the tag with
   `make retag <name>` in hep-forge/.github, or bump `build.number` and retag.
