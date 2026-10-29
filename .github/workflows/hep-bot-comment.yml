@@ -11,10 +11,11 @@ name: hep-bot issue comment
 #                                    register the feedstock in hep-forge/.github
 #   @hep-bot new <pkg> <upstream-url> [license=..] [maintainers=..] [summary]
 #                                    scaffold hep-forge/<pkg>-feedstock
+#   @hep-bot status [<pkg>]          tags, last builds, what is published
 #   @hep-bot help [<topic>]          commands + guides, or one guide
 #
 # Commands work in an issue body (when the issue is opened) or in a
-# comment; in pull requests only `help` is answered. Where HEP_BOT_TOKEN
+# comment; in pull requests only `help` and `status` are answered. Where HEP_BOT_TOKEN
 # isn't available the job falls back to GITHUB_TOKEN, which can rerun that
 # feedstock's own build and reply, while rerender/new are left to the sweep.
 
