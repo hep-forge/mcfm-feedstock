@@ -57,3 +57,8 @@ perl:      # [osx]
 # "used variable" whenever its name appears anywhere in meta.yaml -- even in
 # the 10.x-only jinja branch -- so an mpich key here moved the 6.x build
 # hashes (published h3720f44 -> hbcbd160) without changing their content.
+
+# gfortran pinned like the C/C++ compilers: Fortran .mod files only load
+# with the gfortran major that wrote them, and GCC 14 is the channel floor.
+fortran_compiler_version:   # [linux]
+  - 14
