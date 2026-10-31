@@ -317,7 +317,9 @@ jobs:
     # amd64 and arm64 converge independently; rerunning the failed leg
     # later re-publishes it.
     if: always() && github.ref_type == 'tag' && needs.env.result == 'success'
-    runs-on: ubuntu-latest
+    # The steps below use the image's /usr/share/miniconda, which
+    # ubuntu-26.04 (ubuntu-latest since October 2026) no longer ships.
+    runs-on: ubuntu-24.04
     needs: [env, build]
     steps:
       # needed so the Trim step can read recipe/meta.yaml's
