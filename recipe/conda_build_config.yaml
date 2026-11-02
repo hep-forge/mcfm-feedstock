@@ -12,9 +12,9 @@ c_stdlib_version:
   - 11.0    # [osx]
 
 c_compiler:
-  - gcc
+  - gcc                      # [linux]
 cxx_compiler:
-  - gxx
+  - gxx                      # [linux]
 
 # ---- Compiler floor (ABI)
 # Pin the compiler major instead of inheriting conda-build's "newest
@@ -61,4 +61,4 @@ perl:      # [osx]
 # gfortran pinned like the C/C++ compilers: Fortran .mod files only load
 # with the gfortran major that wrote them, and GCC 14 is the channel floor.
 fortran_compiler_version:   # [linux]
-  - 14
+  - 14                       # [linux]
