@@ -147,7 +147,7 @@ jobs:
           ALL_PLATFORMS='[
             {"id":"amd64","runs-on":"ubuntu-24.04","os":"linux"},
             {"id":"arm64","runs-on":"ubuntu-24.04-arm","os":"linux"},
-            {"id":"macos-arm64","runs-on":"macos-14","os":"macos"}
+            {"id":"macos-arm64","runs-on":"macos-15","os":"macos"}
           ]'
           ALLOWED="${ANACONDA_COMPILE:-amd64,arm64,macos-arm64}"
           # One-off addition for this run only -- see the workflow_dispatch
