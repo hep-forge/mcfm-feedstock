@@ -36,13 +36,13 @@ cxx_compiler:
 # cxx_compiler became [gxx, 14, 14, 14.*, 14.*] and conda-build tried to
 # install a compiler package named `14_osx-arm64`.
 c_compiler_version:    # [linux]
-  - 14                 # [linux]
+  - 16                 # [linux]
 cxx_compiler_version:  # [linux]
-  - 14                 # [linux]
+  - 16                 # [linux]
 libgcc_version:        # [linux]
-  - 14.*               # [linux]
+  - 16.*               # [linux]
 libstdcxx_version:     # [linux]
-  - 14.*               # [linux]
+  - 16.*               # [linux]
 # ---- perl (macOS)
 # perl is an unpinned build requirement, so conda-build falls back to its own
 # built-in default, perl 5.26.2 -- which conda-forge has for Linux but never
@@ -61,4 +61,12 @@ perl:      # [osx]
 # gfortran pinned like the C/C++ compilers: Fortran .mod files only load
 # with the gfortran major that wrote them, and GCC 14 is the channel floor.
 fortran_compiler_version:   # [linux]
-  - 14                       # [linux]
+  - 16                       # [linux]
+
+# conda-forge root_base variant (cxx20/cxx23 in its build string)
+root_cxx_standard:
+  - 23
+
+# ROOT slot (root_base minor version from conda-forge)
+root:
+  - 6.38

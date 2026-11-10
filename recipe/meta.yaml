@@ -110,7 +110,8 @@ requirements:
     # "hoppet =1.2.0 requires lhapdf >=6.5.6,<6.5.7, which conflicts").
     # fastnlo root638 takes lhapdf >=6.5.6,<7 and the set solves on both
     # linux-64 and linux-aarch64.
-    - root 6.38.*
+    - root_base {{ root }}.* cxx{{ root_cxx_standard }}*
+    - python
     - applgrid * root638
     - hoppet ==1.2.0
     {% endif %}
@@ -123,7 +124,7 @@ requirements:
   run:
     - lhapdf
     {% if version.startswith("6.") or "applgrid" in version %}
-    - root 6.38.*
+    - {{ pin_compatible('root_base', exact=True) }}
     - applgrid * root638
     - hoppet ==1.2.0
     {% endif %}
