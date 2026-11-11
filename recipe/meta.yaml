@@ -156,6 +156,11 @@ test:
     # (16 threads): segfault without it; OMP_STACKSIZE=256M runs input.ini to
     # completion (11.7524 nb), as does OMP_NUM_THREADS=1.
     - export OMP_STACKSIZE=256M
+    # Current mpich (5.0.x) starts MPI through UCX, which on the GitHub runners
+    # tries the Azure NIC (ud_verbs/mana_0) and aborts in MPI_Init ("Address
+    # not valid"). A single-process run needs only shared memory (with tcp
+    # added UCX probes every interface and can hang).
+    - export UCX_TLS=self,sm
     - echo "Running \`mcfm\` with $PREFIX/share/mcfm/input.ini (stack $(ulimit -s))"
     - cd $PREFIX/share/mcfm && mcfm
     {% endif %}
