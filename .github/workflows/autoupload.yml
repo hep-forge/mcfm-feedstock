@@ -108,6 +108,8 @@ jobs:
 
       - id: anaconda
         name: Set Package Name, Version and Label
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           [ -n "$COMMIT_TYPE" ] && COMMIT_TYPE="-$COMMIT_TYPE"
 
@@ -118,10 +120,22 @@ jobs:
           ANACONDA_LABEL="${{ github.event.base_ref != '' && github.event.base_ref != 'null' && github.event.base_ref || github.ref }}"
           ANACONDA_LABEL="${ANACONDA_LABEL#refs/heads/}"
           ANACONDA_LABEL="${ANACONDA_LABEL#refs/tags/}"
-          # Labels track branches; a run dispatched at a tag ref has no
-          # branch, so fall back to the default branch instead of the tag.
+          # Labels track branches. A tag run often carries no branch (a
+          # dispatch at a tag ref, or a tag push without base_ref): use the
+          # branch whose tip the tagged commit is (geant3, pythia6, eic, ...),
+          # else the default branch -- also when the default branch is one of
+          # several, as for tags hep-bot moves to main.
           if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$ANACONDA_LABEL" = "$GITHUB_REF_NAME" ]; then
-            ANACONDA_LABEL="${{ github.event.repository.default_branch }}"
+            DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+            HEADS=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/branches-where-head" \
+                      --jq '.[].name' 2>/dev/null || true)
+            if [ -n "$HEADS" ] && [ "$(printf '%s\n' "$HEADS" | grep -c .)" = 1 ] \
+               && [ "$HEADS" != "$DEFAULT_BRANCH" ]; then
+              ANACONDA_LABEL="$HEADS"
+            else
+              ANACONDA_LABEL="$DEFAULT_BRANCH"
+            fi
+            echo "Tag ${GITHUB_REF_NAME} is the tip of: ${HEADS:-no branch} -> label ${ANACONDA_LABEL}"
           fi
           ANACONDA_LABEL="${ANACONDA_LABEL:-main}"
           echo "ANACONDA_LABEL=$ANACONDA_LABEL" >> $GITHUB_ENV
