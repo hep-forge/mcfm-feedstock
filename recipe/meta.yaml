@@ -79,17 +79,14 @@ requirements:
     - mpi
     # MCFM 10.x compiles `use mpi` (mod_CPUTime.f90, -Duse_mpi=ON), reading
     # mpich's mpi.mod: a gfortran MODULE file, readable only by a gfortran
-    # writing the same module version. conda-forge mpich 5.0.1 build _4
-    # (2026-08-19) was compiled with gfortran 15 (module version 16); the
-    # Linux compiler is pinned to 14 (module version 15), so every 10.x Linux
-    # build died ~40 min in: "Cannot read module file '.../src/Inc/mpi.mod'
-    # ... created by a different version of GNU Fortran". _3 is the last build
-    # made with gfortran 14.4. build.sh checks the two versions match before
-    # compiling. Run stays unpinned: only the compile-time .mod is affected.
-    # macOS keeps the newest build (its GCC 16 reads module version 16).
+    # writing the same module version (build.sh checks they match). mpich
+    # builds since 5.0.1 _4 are made with gfortran 15 (module version 16),
+    # which GCC 16 -- the compiler conda-forge's root_base needs, on Linux
+    # too since the switch -- reads, as on macOS. The former Linux pin to
+    # _3 (gfortran 14, module version 15) is what gfortran 16 can't read.
+    # Run stays unpinned: only the compile-time .mod is affected.
     # Pinned here and not in conda_build_config.yaml -- see the note there.
-    - mpich 5.0.1 *_3              # [linux]
-    - mpich                        # [osx]
+    - mpich
     {% endif %}
 
   host:
