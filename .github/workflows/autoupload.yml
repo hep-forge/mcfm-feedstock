@@ -275,6 +275,18 @@ jobs:
           "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --add channels conda-forge
           "${{ steps.conda.outputs.PREFIX }}/bin/conda" config --add channels hep-forge
 
+      - name: Free Disk Space (CUDA builds)
+        # Recipes with CUDA variants (cuda_compiler_version in their
+        # conda_build_config.yaml) install the CUDA toolkit and a CUDA libTorch,
+        # about 11 GB extracted, beside their CPU build: more than a hosted
+        # runner leaves free. Tools no hep-forge build uses go first.
+        if: runner.os == 'Linux' && hashFiles('recipe/conda_build_config.yaml') != ''
+        run: |
+          grep -q '^cuda_compiler_version:' recipe/conda_build_config.yaml || exit 0
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Build Package
         env:
           # NOTE: conda-build filters the environment; CI-level vars do
@@ -291,6 +303,18 @@ jobs:
           ANACONDA_VERSION: ${{ needs.env.outputs.ANACONDA_VERSION }}
           ANACONDA_PACKAGE: ${{ needs.env.outputs.ANACONDA_PACKAGE }}
         run: |
+          # CUDA variants depend on __cuda, which a runner without a GPU does
+          # not have: present it, at the highest CUDA version the recipe lists,
+          # so their host and test environments solve. Only for recipes that
+          # declare cuda_compiler_version (the override would otherwise switch
+          # unpinned dependencies such as onnxruntime-cpp to CUDA builds).
+          if [ "$(uname)" = "Linux" ] && grep -q '^cuda_compiler_version:' recipe/conda_build_config.yaml 2>/dev/null; then
+              CUDA_MAX=$(awk '/^cuda_compiler_version:/ {f=1; next} f && /^[^[:space:]#-]/ {f=0}
+                              f && match($0, /^[[:space:]]*-[[:space:]]*[0-9]+\.[0-9]+/) {v=substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*-[[:space:]]*/, "", v); print v}' \
+                         recipe/conda_build_config.yaml | sort -V | tail -1)
+              export CONDA_OVERRIDE_CUDA="${CUDA_MAX:-12.9}"
+              echo "CUDA variants: CONDA_OVERRIDE_CUDA=$CONDA_OVERRIDE_CUDA"
+          fi
           "${{ steps.conda.outputs.PREFIX }}/bin/conda" build recipe --output-folder pkgs
           # --out-folder: cph writes to the CWD by default, which would
           # drop the .conda outside the pkgs/*/ artifact glob
